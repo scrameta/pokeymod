@@ -19,6 +19,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+#if defined(__CC65__)
+#include <conio.h>
+#endif
 #include "mod_format.h"
 #include "modplayer.h"
 #include "pokeymax.h"
@@ -134,8 +137,12 @@ uint8_t mod_load(const char *filename)
     uint8_t  loaded_samples;
     uint32_t loaded_source_bytes;
     uint32_t loaded_stored_bytes;
+    uint8_t  had_status_output;
     uint8_t  use_adpcm_global;
     uint32_t sample_data_offset;
+#if defined(__CC65__)
+    uint8_t  status_row;
+#endif
 
     memset(&mod, 0, sizeof(mod));
     pat_current_num   = 0xFF;
@@ -203,6 +210,10 @@ uint8_t mod_load(const char *filename)
     loaded_samples      = 0;
     loaded_source_bytes = 0;
     loaded_stored_bytes = 0;
+    had_status_output   = 0;
+#if defined(__CC65__)
+    status_row          = wherey();
+#endif
 
     for (i = 1; i <= MOD_MAX_SAMPLES; i++) {
         SampleInfo *si = &mod.samples[i];
@@ -227,7 +238,10 @@ uint8_t mod_load(const char *filename)
 
         ram_addr = pokeymax_alloc(ram_needed);
         if (ram_addr == POKEYMAX_ALLOC_FAIL) {
-            printf("\rLoading \"%s\" (%u bytes, %s) | sample %u/%u | source %lu/%lu bytes | stored %lu bytes [SKIPPED: no RAM]\n",
+#if defined(__CC65__)
+            gotoxy(0, status_row);
+#endif
+            printf("\rLoading \"%s\" (%u bytes, %s) | sample %u/%u | source %lu/%lu bytes | stored %lu bytes [SKIPPED: no RAM]   ",
                    si->name[0] ? si->name : "(unnamed)",
                    (unsigned)si->length,
                    si->is_adpcm ? "ADPCM" : "PCM",
@@ -237,6 +251,7 @@ uint8_t mod_load(const char *filename)
                    (unsigned long)total_sample_bytes,
                    (unsigned long)loaded_stored_bytes);
             fflush(stdout);
+            had_status_output = 1;
             fseek(mod_file, (long)si->length, SEEK_CUR);
             si->length = 0;
             continue;
@@ -264,7 +279,10 @@ uint8_t mod_load(const char *filename)
             }
             remaining -= chunk;
 
-            printf("\rLoading \"%s\" (%u bytes, %s) | sample %u/%u | source %lu/%lu bytes | stored %lu bytes",
+#if defined(__CC65__)
+            gotoxy(0, status_row);
+#endif
+            printf("\rLoading \"%s\" (%u bytes, %s) | sample %u/%u | source %lu/%lu bytes | stored %lu bytes   ",
                    si->name[0] ? si->name : "(unnamed)",
                    (unsigned)si->length,
                    si->is_adpcm ? "ADPCM" : "PCM",
@@ -274,11 +292,15 @@ uint8_t mod_load(const char *filename)
                    (unsigned long)total_sample_bytes,
                    (unsigned long)(loaded_stored_bytes + written));
             fflush(stdout);
+            had_status_output = 1;
         }
 
         loaded_samples++;
         loaded_source_bytes += si->length;
         loaded_stored_bytes += si->pokeymax_len;
+    }
+
+    if (had_status_output) {
         printf("\n");
         fflush(stdout);
     }
