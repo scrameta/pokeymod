@@ -83,13 +83,13 @@ uint16_t adpcm_encode_block(const int8_t *src, uint16_t pcm_len,
     uint8_t  lo, hi;
 
     for (i = 0; i + 1 < pcm_len; i += 2) {
-        lo = adpcm_encode_sample(src[i],   state);
-        hi = adpcm_encode_sample(src[i+1], state);
+        hi = adpcm_encode_sample(src[i],   state);
+        lo = adpcm_encode_sample(src[i+1], state);
         dst[out_bytes++] = (uint8_t)((hi << 4) | lo);
     }
     if (pcm_len & 1) {
-        lo = adpcm_encode_sample(src[pcm_len - 1], state);
-        dst[out_bytes++] = lo;
+        hi = adpcm_encode_sample(src[pcm_len - 1], state);
+        dst[out_bytes++] = (uint8_t)(hi << 4);
     }
     return out_bytes;
 }

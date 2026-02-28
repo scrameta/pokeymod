@@ -85,9 +85,10 @@ int main(void)
 
     for (i = 0; i < SAMPLE_COUNT; i += 2) {
         uint8_t byte = encoded[i / 2];
-        output[i] = adpcm_decode_nibble(byte & 0x0F, &dec);
+        /* PokeyMAX ADPCM consumes high nibble first (RTL top.vhdl). */
+        output[i] = adpcm_decode_nibble((byte >> 4) & 0x0F, &dec);
         if (i + 1 < SAMPLE_COUNT)
-            output[i + 1] = adpcm_decode_nibble((byte >> 4) & 0x0F, &dec);
+            output[i + 1] = adpcm_decode_nibble(byte & 0x0F, &dec);
     }
 
     for (i = 0; i < SAMPLE_COUNT; i++) {
