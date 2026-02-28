@@ -36,6 +36,7 @@
 #include "pokeymax_hw.h"
 
 uint16_t pokeymax_ram_ptr = 0;
+static uint8_t pokeymax_samcfg_shadow = 0xF0;
 
 void pokeymax_init(void)
 {
@@ -44,7 +45,8 @@ void pokeymax_init(void)
     POKE(REG_IRQEN,  0x00);
     POKE(REG_IRQACT, 0x00);
     /* bits8=1111 (8-bit mode), adpcm=0000 */
-    POKE(REG_SAMCFG, 0xF0);
+    pokeymax_samcfg_shadow = 0xF0;
+    POKE(REG_SAMCFG, pokeymax_samcfg_shadow);
     POKE(REG_COVOX_CH1, 128);
     POKE(REG_COVOX_CH2, 128);
     POKE(REG_COVOX_CH3, 128);
@@ -95,7 +97,13 @@ void pokeymax_channel_setup(uint8_t chan, uint16_t addr, uint16_t len,
      * low nibble  bit(ch-1) = ADPCM enable for channel
      * high nibble bit(ch+3) = 8-bit mode for channel
      */
-    cfg = PEEK(REG_SAMCFG);
+    /*
+     * REG_SAMCFG is write-only on PokeyMAX RTL (no readback path in DO mux).
+     * Reading it works in the Linux shim but returns undefined data on hardware,
+     * which can randomly flip channels between 8-bit/4-bit/ADPCM modes.
+     * Keep a software shadow and write that out instead of PEEK(REG_SAMCFG).
+     */
+    cfg = pokeymax_samcfg_shadow;
     cfg = (unsigned char)(cfg & (unsigned char)~bit);                  /* clear ADPCM bit */
     cfg = (unsigned char)(cfg & (unsigned char)~(unsigned char)(bit << 4u)); /* clear 8-bit bit */
     if (mode_adpcm) {
@@ -103,7 +111,8 @@ void pokeymax_channel_setup(uint8_t chan, uint16_t addr, uint16_t len,
     } else {
         cfg = (unsigned char)(cfg | (unsigned char)(bit << 4u));       /* ADPCM=0, 8-bit=1 */
     }
-    POKE(REG_SAMCFG, cfg);
+    pokeymax_samcfg_shadow = cfg;
+    POKE(REG_SAMCFG, pokeymax_samcfg_shadow);
 
     /* Enable IRQ for this channel */
     irq = PEEK(REG_IRQEN);
