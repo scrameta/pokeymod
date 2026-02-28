@@ -23,8 +23,8 @@
  *   bits [3:0] = adpcm_reg (1=ADPCM)
  *   For 8-bit PCM: write 0xF0. NEVER write 0x00 (clears bits8 -> 4-bit mode).
  *
- * PERIOD: 12-bit. hw_period = amiga_period / 2.
- *   (PokeyMAX ENABLE=PHI2~1.77MHz, Paula=3.55MHz, so half the period.)
+ * PERIOD: 12-bit. hw_period = amiga_period.
+ *   (PokeyMAX ENABLE=PHI2~1.77MHz, but the pokeymax sample engine runs at 2x PHI2, Paula=3.55MHz)
  *
  * CHANSEL: write channel number 1-4 before addr/len/period/vol writes.
  *

@@ -65,14 +65,6 @@ static uint16_t alloc_ram(uint16_t bytes)
     return addr;
 }
 
-static uint16_t period_to_hw(uint16_t p)
-{
-    uint32_t hw = (uint32_t)p * 2UL;  /* PokeyMAX clock=2*PHI2, same ratio as Paula */
-    if (hw == 0) return 1;
-    if (hw > 0xFFFF) return 0xFFFF;
-    return (uint16_t)hw;
-}
-
 int main(void)
 {
     FILE    *f;
@@ -251,7 +243,7 @@ int main(void)
         pokeymax_channel_setup(hw,
                                samples[snum].pokeymax_addr,
                                samples[snum].length,
-                               period_to_hw(period),
+                               period,
                                samples[snum].volume > 63 ? 63 : samples[snum].volume,
                                samples[snum].is_8bit,
                                samples[snum].is_adpcm);

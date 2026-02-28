@@ -110,7 +110,7 @@ static void mock_channel_start_or_retrigger(int idx) {
 static uint32_t period_to_samples_per_frame_q8(uint16_t hw_period, uint8_t is_adpcm) {
     /* Very rough, but monotonic and good enough to generate ends/retriggers.
        PokeyMAX sample rate ~= POKEYMAX_CLOCK / period. We avoid project macros here.
-       PAL Paula*2 clock ~= 3.546895 MHz. */
+       PAL Paula clock ~= 3.546895 MHz. */
     const uint32_t clock_hz = 3546895u;
     const uint32_t frames_hz = 50u;
     if (hw_period == 0) hw_period = 1;
