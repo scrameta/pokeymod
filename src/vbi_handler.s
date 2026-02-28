@@ -192,5 +192,6 @@ zp_save_irq:  .res ZP_SAVE_LEN   ; IRQ zero page save area (must be separate: IR
 
 @chain:
         pla                     ; restore A saved at entry
+        nop
         jmp (old_irq_lo)        ; chain to previous handler
 .endproc

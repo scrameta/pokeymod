@@ -134,6 +134,7 @@ static void display_load_summary(void)
 
 static void display_status(void)
 {
+    gotoxy(0,22);	
     printf("Ord:%3d/%3d Row:%2d BPM:%3d Spd:%d  \r",
            (int)(mod_get_order() + 1),
            (int)mod.song_length,

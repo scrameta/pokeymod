@@ -33,17 +33,6 @@ extern const uint8_t  vibrato_sine[64];
 
 static uint8_t master_volume = 63;
 
-/* -------------------------------------------------------
- * Period conversion: hw = 2 * amiga_period
- * (PokeyMAX core clock = 2 * Paula clock)
- * ------------------------------------------------------- */
-static uint16_t period_to_hw(uint16_t p)
-{
-    uint32_t hw = (uint32_t)p * 2UL;  /* PokeyMAX clock=2*PHI2, same ratio as Paula */
-    if (hw == 0UL)       return 1;
-    if (hw > 0xFFFFUL)   return 0xFFFF;
-    return (uint16_t)hw;
-}
 
 static uint16_t apply_finetune(uint16_t period, int8_t ft)
 {
@@ -92,7 +81,7 @@ static void trigger_sample(uint8_t hw_chan, ChanState *cs)
     if (si->pokeymax_len == 0) return;
     if (cs->period == 0) return;
 
-    hw_period = period_to_hw(cs->period);
+    hw_period = cs->period;
 
     cs->sam_addr   = si->pokeymax_addr;
     cs->sam_len    = si->length;
@@ -266,7 +255,7 @@ static void process_row(void)
 
         /* If no trigger happened, push any volume change to hardware */
         if (!cs->triggered && cs->active) {
-            pokeymax_channel_set_period_vol(hw, period_to_hw(cs->period), cs->hw_vol);
+            pokeymax_channel_set_period_vol(hw, cs->period, cs->hw_vol);
         }
 
         skip_trigger: ;
@@ -302,7 +291,7 @@ static void update_effects(void)
                         uint16_t div = (uint16_t)(256u + (uint16_t)offset * 14u);
                         base = (uint16_t)((uint32_t)base * 256UL / div);
                     }
-                    pokeymax_channel_set_period_vol(hw, period_to_hw(base), cs->hw_vol);
+                    pokeymax_channel_set_period_vol(hw, base, cs->hw_vol);
                 }
                 break;
 
@@ -340,7 +329,7 @@ static void update_effects(void)
                 vib_period = (int16_t)cs->period + delta;
                 if (vib_period < 113) vib_period = 113;
                 if (vib_period > 856) vib_period = 856;
-                pokeymax_channel_set_period_vol(hw, period_to_hw((uint16_t)vib_period), cs->hw_vol);
+                pokeymax_channel_set_period_vol(hw, (uint16_t)vib_period, cs->hw_vol);
                 cs->vib_pos = (uint8_t)((cs->vib_pos + cs->vib_speed) & 63u);
                 break;
             }
@@ -365,7 +354,7 @@ static void update_effects(void)
         }
 
         if ((period_changed || vol_changed) && cs->active) {
-            pokeymax_channel_set_period_vol(hw, period_to_hw(cs->period), cs->hw_vol);
+            pokeymax_channel_set_period_vol(hw, cs->period, cs->hw_vol);
         }
     }
 }
