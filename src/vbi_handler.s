@@ -40,7 +40,8 @@ old_vbi_lo:   .res 1
 old_vbi_hi:   .res 1
 old_irq_lo:   .res 1
 old_irq_hi:   .res 1
-zp_save:      .res ZP_SAVE_LEN   ; zero page save area
+zp_save_vbi:  .res ZP_SAVE_LEN   ; VBI zero page save area
+zp_save_irq:  .res ZP_SAVE_LEN   ; IRQ zero page save area (must be separate: IRQ can interrupt VBI)
 
 .code
 
@@ -116,16 +117,23 @@ zp_save:      .res ZP_SAVE_LEN   ; zero page save area
         ; Save cc65 zero page temporaries
         ldx #ZP_SAVE_LEN-1
 @save:  lda ZP_SAVE_START,x
-        sta zp_save,x
+        sta zp_save_vbi,x
         dex
         bpl @save
+
+        ; Prevent IRQ re-entering cc65 while deferred VBI is inside C.
+        ; Atari VBI is NMI, so IRQs can otherwise interrupt this routine.
+        ; cc65 runtime/C stack is not reentrant.
+        sei
 
         ; Call C tick function
         jsr _mod_vbi_tick
 
+        cli
+
         ; Restore cc65 zero page temporaries
         ldx #ZP_SAVE_LEN-1
-@rest:  lda zp_save,x
+@rest:  lda zp_save_vbi,x
         sta ZP_SAVE_START,x
         dex
         bpl @rest
@@ -163,7 +171,7 @@ zp_save:      .res ZP_SAVE_LEN   ; zero page save area
 
         ldx #ZP_SAVE_LEN-1
 @save:  lda ZP_SAVE_START,x
-        sta zp_save,x
+        sta zp_save_irq,x
         dex
         bpl @save
 
@@ -172,7 +180,7 @@ zp_save:      .res ZP_SAVE_LEN   ; zero page save area
         ; loop_handler clears IRQACT internally
 
         ldx #ZP_SAVE_LEN-1
-@rest:  lda zp_save,x
+@rest:  lda zp_save_irq,x
         sta ZP_SAVE_START,x
         dex
         bpl @rest

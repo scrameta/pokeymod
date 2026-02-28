@@ -30,12 +30,11 @@ TEST3_ADPCM_C = tests/test3_adpcm_tone.c $(SHARED_C)
 TEST4_C  = tests/test4_firstrow.c $(SHARED_C)
 TEST5_C  = tests/test5_vbi.c
 TEST6_C  = tests/test6_irq.c src/pokeymax_hw.c
+TEST7_C  = tests/test7_irq_during_vbi.c src/pokeymax_hw.c
 TEST56_S = src/vbi_handler.s
 
-.PHONY: all player test2 test3 test4 test5 test6 test-adpcm-linux clean
-
-all: modplay.xex test2.xex test3.xex test3ad.xex test4.xex test5.xex test6.xex
-.PHONY: all player test2 test3 test3-adpcm test4 test-adpcm-linux clean
+all: modplay.xex test2.xex test3.xex test3ad.xex test4.xex test5.xex test6.xex test7.xex
+.PHONY: all player test2 test3 test3-adpcm test4 test5 test6 test7 test-adpcm-linux clean
 
 player: modplay.xex
 
@@ -67,11 +66,14 @@ test5.xex: $(TEST5_C) $(TEST56_S)
 test6.xex: $(TEST6_C) $(TEST56_S)
 	cl65 $(CFLAGS) -o test6.xex $(TEST6_C) $(TEST56_S)
 	@echo "Built: test6.xex"
+test7.xex: $(TEST7_C) $(TEST56_S)
+	cl65 $(CFLAGS) -o test7.xex $(TEST7_C) $(TEST56_S)
+	@echo "Built: test7.xex"
 test-adpcm-linux: tests/adpcm_roundtrip_linux.c src/adpcm.c include/adpcm.h
 	gcc -std=c99 -O2 -Wall -Wextra -Iinclude -o tests/adpcm_roundtrip_linux tests/adpcm_roundtrip_linux.c src/adpcm.c -lm
 	./tests/adpcm_roundtrip_linux
 
 clean:
 	rm -f *.xex modplay.map 
-	rm -f src/*.o tests/*.o 
+	rm -f *.o src/*.o tests/*.o 
 
