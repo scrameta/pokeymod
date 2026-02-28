@@ -8,16 +8,6 @@
  *   fresh sample: ensure DMA bit is 0, write all regs, then set DMA=1.
  *   To retrigger mid-play: toggle 1->0->1.
  *
- * SIGN BIT INVERSION: top.vhdl line:
- *   store_data(12) <= not(ram_data(7))
- *   The hardware inverts bit 7 of every 8-bit sample when storing into
- *   its internal audio buffer. This means PCM data must be written with
- *   bit 7 pre-inverted so the hardware un-inverts it correctly.
- *   Original signed PCM: -128..+127 (bit7=sign, two's complement)
- *   We must XOR each byte with 0x80 before writing to block RAM.
- *   This converts: silence(0) -> 0x80, +127 -> 0x7F, -128 -> 0x00
- *   Which after hardware inversion becomes: silence(0x80->0), etc. -- correct.
- *
  * REG_SAMCFG ($D293):
  *   bits [7:4] = bits8_reg (1=8-bit, resets to 1111)
  *   bits [3:0] = adpcm_reg (1=ADPCM)
