@@ -24,11 +24,12 @@ PLAYER_O = $(PLAYER_C:.c=.o) $(PLAYER_S:.s=.o)
 # --- Tests (each is a single .c + shared) ---
 TEST2_C  = tests/test2_header.c
 TEST3_C  = tests/test3_tone.c    $(SHARED_C)
+TEST3_ADPCM_C = tests/test3_adpcm_tone.c $(SHARED_C)
 TEST4_C  = tests/test4_firstrow.c $(SHARED_C)
 
-.PHONY: all player test2 test3 test4 test-adpcm-linux clean
+.PHONY: all player test2 test3 test3-adpcm test4 test-adpcm-linux clean
 
-all: modplay.xex test2.xex test3.xex test4.xex
+all: modplay.xex test2.xex test3.xex test3_adpcm.xex test4.xex
 
 player: modplay.xex
 
@@ -45,6 +46,10 @@ test3.xex: $(TEST3_C)
 	cl65 $(CFLAGS) -o test3.xex $(TEST3_C)
 	@echo "Built: test3.xex"
 
+test3_adpcm.xex: $(TEST3_ADPCM_C)
+	cl65 $(CFLAGS) -o test3_adpcm.xex $(TEST3_ADPCM_C)
+	@echo "Built: test3_adpcm.xex"
+
 test4.xex: $(TEST4_C)
 	cl65 $(CFLAGS) -o test4.xex $(TEST4_C)
 	@echo "Built: test4.xex"
@@ -54,6 +59,6 @@ test-adpcm-linux: tests/adpcm_roundtrip_linux.c src/adpcm.c include/adpcm.h
 	./tests/adpcm_roundtrip_linux
 
 clean:
-	rm -f modplay.xex modplay.map test2.xex test3.xex test4.xex
+	rm -f modplay.xex modplay.map test2.xex test3.xex test3_adpcm.xex test4.xex
 	rm -f src/*.o tests/*.o 
 
