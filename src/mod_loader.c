@@ -192,7 +192,12 @@ uint8_t mod_load(const char *filename)
 
         if (si->length == 0u) continue;
 
-        if (use_adpcm_global && si->length > 512u) {
+        /*
+         * ADPCM + sample-end loop retrigger causes decoder state reset in hardware
+         * (DMA toggle -> syncreset), which badly distorts looped instruments.
+         * Keep looped samples in 8-bit PCM; ADPCM only for non-looping samples.
+         */
+        if (use_adpcm_global && si->length > 512u && !si->has_loop) {
             ram_needed = (si->length + 1u) / 2u;
             si->is_adpcm = 1; si->is_8bit = 0;
         } else {

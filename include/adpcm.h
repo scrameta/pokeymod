@@ -4,7 +4,8 @@
  * IMA ADPCM encoder: converts 8-bit signed PCM → 4-bit IMA ADPCM.
  * Compatible with sox "-e ima-adpcm" output as used by PokeyMAX.
  *
- * Output format: nibbles packed low-nibble-first per byte.
+ * Output format: nibbles packed high-nibble-first per byte for PokeyMAX
+ * (first sample in high nibble, second sample in low nibble).
  * 2 samples per byte → 4:1 compression on 8-bit input.
  */
 
@@ -37,7 +38,7 @@ uint8_t adpcm_encode_sample(int8_t pcm_sample, ADPCMState *state);
  * Encode 'pcm_len' bytes of 8-bit signed PCM from 'src' into IMA ADPCM.
  * Output written to 'dst'. Returns number of bytes written.
  * dst must be at least (pcm_len + 1) / 2 bytes.
- * Nibbles packed: low nibble = first sample, high nibble = second sample.
+ * Nibbles packed: high nibble = first sample, low nibble = second sample.
  */
 uint16_t adpcm_encode_block(const int8_t *src, uint16_t pcm_len,
                              uint8_t *dst, ADPCMState *state);
