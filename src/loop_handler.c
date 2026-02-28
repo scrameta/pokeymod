@@ -49,8 +49,11 @@ void pokeymax_loop_handler(void)
 
                 pokeymax_channel_trigger(hw, loop_addr, loop_len);
             } else {
-                /* One-shot: silence channel */
+                /* One-shot: fully stop channel (DMA+IRQ off) to avoid IRQ storms
+                 * on already-ended samples. Just zeroing volume can leave the
+                 * sample-end IRQ reasserting continuously on some lengths. */
                 cs->active = 0;
+                pokeymax_channel_stop(hw);
                 POKE(REG_CHANSEL, hw);
                 POKE(REG_VOL, 0);
             }
