@@ -5,6 +5,8 @@
 #   make test2       - MOD header dump
 #   make test3       - sine tone test (no MOD file needed)
 #   make test4       - first row trigger test
+#   make test5       - deferred VBI hook counter test
+#   make test6       - PokeyMAX sample IRQ counter test
 #   make all         - build everything
 #   make clean       - remove all build artefacts
 
@@ -26,10 +28,14 @@ TEST2_C  = tests/test2_header.c
 TEST3_C  = tests/test3_tone.c    $(SHARED_C)
 TEST3_ADPCM_C = tests/test3_adpcm_tone.c $(SHARED_C)
 TEST4_C  = tests/test4_firstrow.c $(SHARED_C)
+TEST5_C  = tests/test5_vbi.c
+TEST6_C  = tests/test6_irq.c src/pokeymax_hw.c
+TEST56_S = src/vbi_handler.s
 
+.PHONY: all player test2 test3 test4 test5 test6 test-adpcm-linux clean
+
+all: modplay.xex test2.xex test3.xex test3ad.xex test4.xex test5.xex test6.xex
 .PHONY: all player test2 test3 test3-adpcm test4 test-adpcm-linux clean
-
-all: modplay.xex test2.xex test3.xex test3_adpcm.xex test4.xex
 
 player: modplay.xex
 
@@ -46,19 +52,26 @@ test3.xex: $(TEST3_C)
 	cl65 $(CFLAGS) -o test3.xex $(TEST3_C)
 	@echo "Built: test3.xex"
 
-test3_adpcm.xex: $(TEST3_ADPCM_C)
-	cl65 $(CFLAGS) -o test3_adpcm.xex $(TEST3_ADPCM_C)
-	@echo "Built: test3_adpcm.xex"
+test3ad.xex: $(TEST3_ADPCM_C)
+	cl65 $(CFLAGS) -o test3ad.xex $(TEST3_ADPCM_C)
+	@echo "Built: test3ad.xex"
 
 test4.xex: $(TEST4_C)
 	cl65 $(CFLAGS) -o test4.xex $(TEST4_C)
 	@echo "Built: test4.xex"
 
+test5.xex: $(TEST5_C) $(TEST56_S)
+	cl65 $(CFLAGS) -o test5.xex $(TEST5_C) $(TEST56_S)
+	@echo "Built: test5.xex"
+
+test6.xex: $(TEST6_C) $(TEST56_S)
+	cl65 $(CFLAGS) -o test6.xex $(TEST6_C) $(TEST56_S)
+	@echo "Built: test6.xex"
 test-adpcm-linux: tests/adpcm_roundtrip_linux.c src/adpcm.c include/adpcm.h
 	gcc -std=c99 -O2 -Wall -Wextra -Iinclude -o tests/adpcm_roundtrip_linux tests/adpcm_roundtrip_linux.c src/adpcm.c -lm
 	./tests/adpcm_roundtrip_linux
 
 clean:
-	rm -f modplay.xex modplay.map test2.xex test3.xex test3_adpcm.xex test4.xex
+	rm -f *.xex modplay.map 
 	rm -f src/*.o tests/*.o 
 
