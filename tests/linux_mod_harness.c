@@ -77,6 +77,7 @@ static struct {
     FILE *wav_fp;
     uint32_t wav_data_bytes;
     uint8_t wav_header_written;
+    int wav_gain;            /* linear gain multiplier for mixed sample */
 } g;
 
 static void mock_log(const char *fmt, ...) {
@@ -338,6 +339,7 @@ static void mock_render_audio_for_one_vbi(void) {
                 }
             }
         }
+        mix *= g.wav_gain;
         if (mix > 32767) mix = 32767;
         if (mix < -32768) mix = -32768;
         wav_write_sample_i16((int16_t)mix);
@@ -357,7 +359,7 @@ static void dump_pos(const char *tag) {
 
 static void usage(const char *argv0) {
     fprintf(stderr,
-            "Usage: %s <modfile> [--frames N] [--verbose] [--trace-boundary] [--no-loop-handler] [--wav out.wav] [--rate Hz]\n",
+            "Usage: %s <modfile> [--frames N] [--verbose] [--trace-boundary] [--no-loop-handler] [--wav out.wav] [--rate Hz] [--gain N]\n",
             argv0);
 }
 
@@ -369,6 +371,7 @@ int main(int argc, char **argv) {
 
     memset(&g, 0, sizeof(g));
     g.regs[REG_SAMCFG] = 0xF0; /* reset default */
+    g.wav_gain = 96;          /* decent starting point for 4x 8-bit mix */
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--frames") == 0 && i + 1 < argc) {
@@ -383,6 +386,9 @@ int main(int argc, char **argv) {
             wav_path = argv[++i];
         } else if (strcmp(argv[i], "--rate") == 0 && i + 1 < argc) {
             g.wav_rate = (uint32_t)strtoul(argv[++i], NULL, 0);
+        } else if (strcmp(argv[i], "--gain") == 0 && i + 1 < argc) {
+            g.wav_gain = (int)strtol(argv[++i], NULL, 0);
+            if (g.wav_gain < 1) g.wav_gain = 1;
         } else if (argv[i][0] == '-') {
             usage(argv[0]);
             return 2;
@@ -408,7 +414,7 @@ int main(int argc, char **argv) {
             mod_file_close();
             return 1;
         }
-        printf("WAV output: %s @ %u Hz\n", wav_path, (unsigned)g.wav_rate);
+        printf("WAV output: %s @ %u Hz (gain=%d)\n", wav_path, (unsigned)g.wav_rate, g.wav_gain);
     }
 
     dump_pos("start");
