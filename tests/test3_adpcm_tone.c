@@ -68,7 +68,7 @@ int main(void)
     printf("Encoded %u PCM -> %u ADPCM bytes\n", PCM_SAMPLES, out_len);
 
     pokeymax_init();
-    pokeymax_write_ram_raw(0u, adpcm_buf, out_len);
+    pokeymax_write_ram(0u, adpcm_buf, out_len);
 
     POKE(REG_CHANSEL, 1);
     POKE(REG_ADDRL,   0x00);

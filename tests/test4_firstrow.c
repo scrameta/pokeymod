@@ -201,7 +201,7 @@ int main(void)
                 out_len = adpcm_encode_block((const int8_t*)sector_buf, chunk,
                                              adpcm_out, &adpcm_state);
                 /* ADPCM data is already encoded nibbles; write raw bytes. */
-                pokeymax_write_ram_raw(ram_addr + written, adpcm_out, out_len);
+                pokeymax_write_ram(ram_addr + written, adpcm_out, out_len);
                 written += out_len;
             } else {
                 pokeymax_write_ram(ram_addr + written, sector_buf, chunk);

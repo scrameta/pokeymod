@@ -74,12 +74,6 @@ void pokeymax_write_ram(uint16_t addr, const uint8_t *data, uint16_t len)
         POKE(REG_RAMDATAINC, data[i]);
 }
 
-/* Alias - same as write_ram, kept for API compatibility */
-void pokeymax_write_ram_raw(uint16_t addr, const uint8_t *data, uint16_t len)
-{
-    pokeymax_write_ram(addr, data, len);
-}
-
 void pokeymax_channel_setup(uint8_t chan, uint16_t addr, uint16_t len,
                              uint16_t period, uint8_t vol,
                              uint8_t mode_8bit, uint8_t mode_adpcm)

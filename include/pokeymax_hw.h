@@ -20,17 +20,10 @@ void pokeymax_init(void);
 uint16_t pokeymax_alloc(uint16_t bytes);
 
 /*
- * Write 8-bit PCM data to block RAM with sign-bit pre-inversion (XOR 0x80).
- * PokeyMAX hardware inverts bit 7 on store; we pre-invert to compensate.
+ * Write 8-bit SIGNED PCM data to block RAM
  * Use this for all 8-bit PCM samples.
  */
 void pokeymax_write_ram(uint16_t addr, const uint8_t *data, uint16_t len);
-
-/*
- * Write raw bytes to block RAM without sign inversion.
- * Use this for ADPCM-encoded data.
- */
-void pokeymax_write_ram_raw(uint16_t addr, const uint8_t *data, uint16_t len);
 
 /*
  * Configure and start a channel from scratch.

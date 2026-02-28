@@ -80,14 +80,6 @@ static struct {
     int wav_gain;            /* linear gain multiplier for mixed sample */
 } g;
 
-static void mock_log(const char *fmt, ...) {
-    va_list ap;
-    if (!g.verbose) return;
-    va_start(ap, fmt);
-    vfprintf(stdout, fmt, ap);
-    va_end(ap);
-}
-
 /* forward decls for shim macros in tests/linuxshim/pokeymax.h */
 uint8_t pokeymax_mock_peek(uint16_t addr);
 void    pokeymax_mock_poke(uint16_t addr, uint8_t val);

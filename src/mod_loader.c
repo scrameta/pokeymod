@@ -235,7 +235,7 @@ uint8_t mod_load(const char *filename)
             if (si->is_adpcm) {
                 out_len = adpcm_encode_block((const int8_t*)sector_buf, chunk,
                                              adpcm_out, &adpcm_state);
-                pokeymax_write_ram_raw(ram_addr + written, adpcm_out, out_len);
+                pokeymax_write_ram(ram_addr + written, adpcm_out, out_len);
                 written += out_len;
             } else {
                 pokeymax_write_ram(ram_addr + written, sector_buf, chunk);
