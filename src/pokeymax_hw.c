@@ -97,14 +97,17 @@ void pokeymax_channel_setup(uint8_t chan, uint16_t addr, uint16_t len,
     POKE(REG_PERH,  (unsigned char)((period >> 8) & 0x0Fu));
     POKE(REG_VOL,   (unsigned char)(vol & 0x3Fu));
 
-    /* Update SAMCFG for this channel */
+    /* Update SAMCFG for this channel only (preserve other channels):
+     * low nibble  bit(ch-1) = ADPCM enable for channel
+     * high nibble bit(ch+3) = 8-bit mode for channel
+     */
     cfg = PEEK(REG_SAMCFG);
+    cfg = (unsigned char)(cfg & (unsigned char)~bit);                  /* clear ADPCM bit */
+    cfg = (unsigned char)(cfg & (unsigned char)~(unsigned char)(bit << 4u)); /* clear 8-bit bit */
     if (mode_adpcm) {
-        cfg = (unsigned char)( cfg |  bit);           /* set adpcm bit */
-        cfg = (unsigned char)((cfg & nbit) | (cfg & 0xF0u & ~(unsigned char)(bit << 4u)));
+        cfg = (unsigned char)(cfg | bit);                              /* ADPCM=1, 8-bit=0 */
     } else {
-        cfg = (unsigned char)( cfg & nbit);           /* clear adpcm bit */
-        cfg = (unsigned char)( cfg | (unsigned char)(bit << 4u)); /* set bits8 bit */
+        cfg = (unsigned char)(cfg | (unsigned char)(bit << 4u));       /* ADPCM=0, 8-bit=1 */
     }
     POKE(REG_SAMCFG, cfg);
 
