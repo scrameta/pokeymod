@@ -450,8 +450,6 @@ static void do_tick(void)
  * ------------------------------------------------------- */
 void mod_vbi_tick(void)
 {
-    /* Service sample-end loop retriggers here (safe C context) instead of IRQ. */
-    pokeymax_service_pending_loops();
     if (!mod.playing) return;
     update_bpm_step();
     bpm_accum += bpm_step;
@@ -487,11 +485,14 @@ void mod_play(void)
     bpm_accum     = 0;
     last_bpm      = 0;
 
-    /* Enable IRQs for all channels (DMA enabled per-channel at trigger time) */
-    /* Clear stale sample-end IRQ flags before enabling IRQs */
+    /* Keep sample IRQs disabled at startup. They are enabled per-channel in
+     * pokeymax_channel_setup() when a real note is triggered on tick 0.
+     * Enabling all channels here can generate immediate IRQs on unconfigured
+     * channels and re-enter C while mod_play() is still running.
+     */
+    POKE(REG_DMA,    0x00);
     POKE(REG_IRQACT, 0x00);
-    POKE(REG_IRQEN,  0x00);   /* optional belt-and-braces */
-    pokeymax_irq_enable_all();
+    POKE(REG_IRQEN,  0x00);
 }
 
 void mod_stop(void)

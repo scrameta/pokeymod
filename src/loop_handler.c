@@ -14,9 +14,6 @@
 #include "pokeymax_hw.h"
 #include "modplayer.h"
 
-/* Set by IRQ asm handler in vbi_handler.s; serviced from VBI C. */
-extern uint8_t pokeymax_irq_pending;
-
 void pokeymax_loop_handler(void)
 {
     unsigned char active;
@@ -24,7 +21,7 @@ void pokeymax_loop_handler(void)
     unsigned char bit;
 
     active = PEEK(REG_IRQACT);
-    POKE(REG_IRQACT, 0x00);     /* legacy direct-IRQ path: clear all IRQ flags */
+    POKE(REG_IRQACT, 0x00);     /* clear all IRQ flags immediately */
 
     for (ch = 0; ch < MOD_CHANNELS; ch++) {
         bit = (unsigned char)(1u << ch);
@@ -60,51 +57,6 @@ void pokeymax_loop_handler(void)
                 POKE(REG_CHANSEL, hw);
                 POKE(REG_VOL, 0);
             }
-        }
-    }
-}
-
-
-void pokeymax_service_pending_loops(void)
-{
-    unsigned char active;
-    unsigned char ch;
-    unsigned char bit;
-
-    active = pokeymax_irq_pending;
-    if (!active) return;
-
-    /* Clear before servicing so new IRQs can accumulate while we run; they
-     * will be serviced on the next VBI. */
-    pokeymax_irq_pending = 0;
-
-    for (ch = 0; ch < MOD_CHANNELS; ch++) {
-        ChanState *cs;
-        uint8_t hw;
-
-        bit = (unsigned char)(1u << ch);
-        if (!(active & bit)) continue;
-
-        cs = &mod.chan[ch];
-        hw = (uint8_t)(ch + 1u);
-
-        if (!cs->active) continue;
-
-        if (cs->has_loop && cs->loop_len > 2u) {
-            uint16_t loop_addr, loop_len;
-            if (cs->is_adpcm) {
-                loop_addr = cs->sam_addr + (cs->loop_start >> 1);
-                loop_len  = cs->loop_len;
-            } else {
-                loop_addr = cs->sam_addr + cs->loop_start;
-                loop_len  = cs->loop_len;
-            }
-            pokeymax_channel_trigger(hw, loop_addr, loop_len);
-        } else {
-            cs->active = 0;
-            pokeymax_channel_stop(hw);
-            POKE(REG_CHANSEL, hw);
-            POKE(REG_VOL, 0);
         }
     }
 }

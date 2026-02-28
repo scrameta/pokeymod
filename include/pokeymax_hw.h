@@ -63,9 +63,4 @@ void pokeymax_channel_stop(uint8_t chan);
 /* Enable IRQ on all 4 channels */
 void pokeymax_irq_enable_all(void);
 
-/* Service pending sample-end IRQs collected by IRQ asm handler. Call from a
- * safe C context (deferred VBI or foreground), not from IRQ. */
-void pokeymax_service_pending_loops(void);
-extern uint8_t pokeymax_irq_pending;
-
 #endif /* POKEYMAX_HW_H */
