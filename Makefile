@@ -80,8 +80,8 @@ test8.xex: $(TEST8_C) $(TEST56_S)
 test9.xex: $(TEST9_C) $(TEST56_S)
 	cl65 $(CFLAGS) -o test9.xex $(TEST9_C) $(TEST56_S)
 	@echo "Built: test9.xex"
-test9b.xex: $(TEST9B_C)
-	cl65 $(CFLAGS) -o test9b.xex $(TEST9B_C)
+test9b.xex: $(TEST9B_C) $(TEST56_S)
+	cl65 $(CFLAGS) -o test9b.xex $(TEST9B_C) $(TEST56_S)
 	@echo "Built: test9b.xex"
 test10.xex: $(TEST10_C) $(TEST56_S)
 	cl65 $(CFLAGS) -o test10.xex $(TEST10_C) $(TEST56_S)

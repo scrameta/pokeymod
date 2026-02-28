@@ -450,6 +450,8 @@ static void do_tick(void)
  * ------------------------------------------------------- */
 void mod_vbi_tick(void)
 {
+    /* Service sample-end loop retriggers here (safe C context) instead of IRQ. */
+    pokeymax_service_pending_loops();
     if (!mod.playing) return;
     update_bpm_step();
     bpm_accum += bpm_step;

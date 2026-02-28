@@ -15,8 +15,8 @@
 
         .export _vbi_install
         .export _vbi_remove
+        .export _pokeymax_irq_pending
         .import _mod_vbi_tick
-        .import _pokeymax_loop_handler
 
 ; OS equates
 VVBLKD      = $0224     ; deferred VBI vector (lo/hi)
@@ -42,6 +42,7 @@ old_irq_lo:   .res 1
 old_irq_hi:   .res 1
 zp_save_vbi:  .res ZP_SAVE_LEN   ; VBI zero page save area
 zp_save_irq:  .res ZP_SAVE_LEN   ; IRQ zero page save area (must be separate: IRQ can interrupt VBI)
+_pokeymax_irq_pending: .res 1   ; bitmask of pending PokeyMAX sample-end IRQs (set in IRQ asm, serviced in VBI C)
 
 .code
 
@@ -67,6 +68,9 @@ zp_save_irq:  .res ZP_SAVE_LEN   ; IRQ zero page save area (must be separate: IR
         lda #7                 ; deferred VBI (VVBLKD)
         jsr SETVBV
 
+        lda #0
+        sta _pokeymax_irq_pending
+
         ; Install IRQ handler
         sei
         lda #<our_irq
@@ -87,6 +91,9 @@ zp_save_irq:  .res ZP_SAVE_LEN   ; IRQ zero page save area (must be separate: IR
         ldx old_vbi_hi         ; X = high byte
         lda #7                 ; deferred VBI
         jsr SETVBV
+
+        lda #0
+        sta _pokeymax_irq_pending
 
         ; Restore IRQ
         sei
@@ -159,31 +166,27 @@ zp_save_irq:  .res ZP_SAVE_LEN   ; IRQ zero page save area (must be separate: IR
 ;--------------------------------------------------------------
 .proc our_irq
         ; Quick check: is this a PokeyMAX sample IRQ?
-        pha                     ; save A first (needed for RTI path)
+        pha                     ; save A first (needed for chain path)
         lda SAM_IRQACT
         beq @chain              ; nothing from PokeyMAX, skip
 
-        ; It's ours - save remaining regs and ZP
+        ; Clear PokeyMAX sample-end IRQ flags immediately and accumulate
+        ; them into a pending bitmask to be serviced later from VBI C.
+        ; This avoids calling C from IRQ (cc65 runtime/stdio is not reentrant).
+        sta @tmp_active
+        lda #$00
+        sta SAM_IRQACT
+
         txa
         pha
         tya
         pha
 
-        ldx #ZP_SAVE_LEN-1
-@save:  lda ZP_SAVE_START,x
-        sta zp_save_irq,x
-        dex
-        bpl @save
-
-        jsr _pokeymax_loop_handler
-
-        ; loop_handler clears IRQACT internally
-
-        ldx #ZP_SAVE_LEN-1
-@rest:  lda zp_save_irq,x
-        sta ZP_SAVE_START,x
-        dex
-        bpl @rest
+        ldx @tmp_active
+        lda _pokeymax_irq_pending
+        txa
+        ora _pokeymax_irq_pending
+        sta _pokeymax_irq_pending
 
         pla
         tay
@@ -193,4 +196,7 @@ zp_save_irq:  .res ZP_SAVE_LEN   ; IRQ zero page save area (must be separate: IR
 @chain:
         pla                     ; restore A saved at entry
         jmp (old_irq_lo)        ; chain to previous handler
+
+@tmp_active:
+        .byte 0
 .endproc
