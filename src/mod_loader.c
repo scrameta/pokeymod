@@ -148,7 +148,16 @@ uint8_t mod_load(const char *filename)
     total_sample_bytes = 0;
     for (i = 1; i <= MOD_MAX_SAMPLES; i++) {
         SampleInfo *si = &mod.samples[i];
+        uint8_t j;
         if (fread(hdr_buf, 1, 30, mod_file) != 30) return 1;
+        for (j = 0; j < MOD_SAMPLE_NAME_LEN; j++) {
+            uint8_t c = hdr_buf[j];
+            if (c == 0u) break;
+            if (c < 32u || c > 126u) c = '.';
+            si->name[j] = (char)c;
+        }
+        while (j < MOD_SAMPLE_NAME_LEN) si->name[j++] = 0;
+        si->name[MOD_SAMPLE_NAME_LEN] = 0;
         si->length     = read_be16(hdr_buf + 22) * 2u;
         si->finetune   = (int8_t)(hdr_buf[24] & 0x0Fu);
         if (si->finetune > 7) si->finetune -= 16;

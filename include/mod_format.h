@@ -46,6 +46,7 @@ typedef struct {
     uint16_t pokeymax_len;   /* actual length stored (may be ADPCM compressed) */
     uint8_t  is_adpcm;       /* 1 if stored as ADPCM in PokeyMAX RAM */
     uint8_t  is_8bit;        /* 1 if stored as 8-bit signed (default for small) */
+    char     name[MOD_SAMPLE_NAME_LEN + 1]; /* null-terminated for debug/UI */
 } SampleInfo;
 
 /* -------------------------------------------------------
