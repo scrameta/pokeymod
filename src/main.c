@@ -94,6 +94,29 @@ static uint8_t pokeymax_detect(void)
 /* -------------------------------------------------------
  * Status line
  * ------------------------------------------------------- */
+
+static void display_load_summary(void)
+{
+    uint8_t i;
+    uint8_t loaded = 0, adpcm = 0, looped = 0;
+    uint32_t raw_bytes = 0, hw_bytes = 0;
+
+    for (i = 1; i <= MOD_MAX_SAMPLES; i++) {
+        const SampleInfo *si = &mod.samples[i];
+        if (si->length == 0u) continue;
+        loaded++;
+        if (si->is_adpcm) adpcm++;
+        if (si->has_loop) looped++;
+        raw_bytes += si->length;
+        hw_bytes  += si->pokeymax_len;
+    }
+
+    printf("Samples:  %u loaded (%u ADPCM, %u looped)\n",
+           (unsigned)loaded, (unsigned)adpcm, (unsigned)looped);
+    printf("Audio:    %lu bytes raw -> %lu bytes PokeyMAX\n",
+           (unsigned long)raw_bytes, (unsigned long)hw_bytes);
+}
+
 static void display_status(void)
 {
     printf("Ord:%3d/%3d Row:%2d BPM:%3d Spd:%d  \r",
@@ -134,6 +157,7 @@ int main(int argc, char *argv[])
     printf("RAM used: %u / %u\n",
            (unsigned)pokeymax_ram_ptr,
            (unsigned)POKEYMAX_RAM_SIZE);
+    display_load_summary();
     printf("\nSPACE=pause  any key=stop\n\n");
 
     /* Clear any stale keypress */

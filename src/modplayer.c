@@ -472,6 +472,9 @@ void mod_play(void)
     last_bpm      = 0;
 
     /* Enable IRQs for all channels (DMA enabled per-channel at trigger time) */
+    /* Clear stale sample-end IRQ flags before enabling IRQs */
+    POKE(REG_IRQACT, 0x00);
+    POKE(REG_IRQEN,  0x00);   /* optional belt-and-braces */
     pokeymax_irq_enable_all();
 }
 
