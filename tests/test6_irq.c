@@ -5,8 +5,8 @@
  * pokeymax_loop_handler() that increments a counter each IRQ.
  *
  * We configure channel 1 with a tiny 8-bit sample so sample-end IRQs
- * occur quickly. In the loop handler we retrigger the same sample,
- * producing a steady IRQ stream.
+ * occur quickly. The IRQ hook only ACKs/counts, and the foreground loop
+ * does the retrigger to keep ISR work safe for cc65/Atari constraints.
  *
  * Expected on Atari:
  *   - irq_count increases continuously
@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <conio.h>
+#include <atari.h>
 #include "pokeymax.h"
 #include "pokeymax_hw.h"
 
@@ -24,6 +25,7 @@ extern void vbi_remove(void);
 
 static volatile uint16_t irq_count = 0;
 static volatile uint16_t vbi_count = 0;
+static volatile uint8_t irq_pending = 0;
 
 static const uint8_t pulse_sample[32] = {
     0, 32, 64, 96, 127, 96, 64, 32,
@@ -43,16 +45,9 @@ void pokeymax_loop_handler(void)
 {
     ++irq_count;
 
-    /* Clear all active sample IRQ flags */
-    POKE(REG_IRQACT, 0x00);
-
-    /* Keep generating IRQs by retriggering channel 1 */
-    pokeymax_channel_trigger(1, 0, (uint16_t)sizeof(pulse_sample));
-
-    /* Visible heartbeat from IRQ context */
-    if ((irq_count & 0x1F) == 0) {
-        POKE(0xD01A, (unsigned char)((PEEK(0xD01A) + 1) & 0x0F));
-    }
+    /* IRQ context: keep it minimal and deterministic. */
+    POKE(REG_IRQACT, 0x00);   /* ACK sample IRQ */
+    irq_pending = 1;          /* retrigger in foreground */
 }
 
 static uint8_t detect_sample_player(void)
@@ -87,7 +82,7 @@ int main(void)
     /* Install player VBI+IRQ hooks */
     vbi_install();
 
-    /* Trigger channel 1 once; loop handler retriggers thereafter */
+    /* Trigger channel 1 once; foreground loop retriggers after IRQ ACK. */
     pokeymax_channel_setup(1, 0, (uint16_t)sizeof(pulse_sample), 428, 40, 1, 0);
 
     printf("IRQ test running.\n");
@@ -96,11 +91,23 @@ int main(void)
 
     POKE(CH, 255);
     while (PEEK(CH) == 255) {
+        if (irq_pending) {
+            irq_pending = 0;
+            pokeymax_channel_trigger(1, 0, (uint16_t)sizeof(pulse_sample));
+        }
+
         uint16_t now = irq_count;
         if (now != last_irq) {
-            printf("IRQ: %5u  VBI: %5u\r", (unsigned)now, (unsigned)vbi_count);
+            gotoxy(0, 8);
+            cprintf("IRQ: %5u  VBI: %5u", (unsigned)now, (unsigned)vbi_count);
+
+            if ((now & 0x0F) == 0) {
+                POKE(0xD01A, (unsigned char)((PEEK(0xD01A) + 1) & 0x0F));
+            }
             last_irq = now;
         }
+
+        waitvsync();
     }
 
     pokeymax_channel_stop(1);
