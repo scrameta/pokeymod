@@ -60,10 +60,10 @@ zp_save:      .res ZP_SAVE_LEN   ; zero page save area
         lda VIMIRQ+1
         sta old_irq_hi
 
-        ; Install deferred VBI via OS SETVBV (A=6, X=lo, Y=hi)
-        ldx #<our_vbi
-        ldy #>our_vbi
-        lda #6
+        ; Install deferred VBI via OS SETVBV (A=7, X=hi, Y=lo)
+        ldy #<our_vbi          ; Y = low byte
+        ldx #>our_vbi          ; X = high byte
+        lda #7                 ; deferred VBI (VVBLKD)
         jsr SETVBV
 
         ; Install IRQ handler
@@ -82,9 +82,9 @@ zp_save:      .res ZP_SAVE_LEN   ; zero page save area
 ;--------------------------------------------------------------
 .proc _vbi_remove
         ; Restore deferred VBI
-        ldx old_vbi_lo
-        ldy old_vbi_hi
-        lda #6
+        ldy old_vbi_lo         ; Y = low byte
+        ldx old_vbi_hi         ; X = high byte
+        lda #7                 ; deferred VBI
         jsr SETVBV
 
         ; Restore IRQ
