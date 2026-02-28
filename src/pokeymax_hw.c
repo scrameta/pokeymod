@@ -27,12 +27,16 @@
 
 uint16_t pokeymax_ram_ptr = 0;
 static uint8_t pokeymax_samcfg_shadow = 0xF0;
+static uint8_t pokeymax_dma_shadow    = 0x00;
+static uint8_t pokeymax_irqen_shadow  = 0x00;
 
 void pokeymax_init(void)
 {
     pokeymax_ram_ptr = 0;
-    POKE(REG_DMA,    0x00);
-    POKE(REG_IRQEN,  0x00);
+    pokeymax_dma_shadow   = 0x00;
+    pokeymax_irqen_shadow = 0x00;
+    POKE(REG_DMA,    pokeymax_dma_shadow);
+    POKE(REG_IRQEN,  pokeymax_irqen_shadow);
     POKE(REG_IRQACT, 0x00);
     /* bits8=1111 (8-bit mode), adpcm=0000 */
     pokeymax_samcfg_shadow = 0xF0;
@@ -72,7 +76,7 @@ void pokeymax_channel_setup(uint8_t chan, uint16_t addr, uint16_t len,
 {
     unsigned char bit  = (unsigned char)(1u << (chan - 1u));
     unsigned char nbit = (unsigned char)(~bit & 0x0Fu);
-    unsigned char dma, cfg, irq;
+    unsigned char cfg;
 
     POKE(REG_CHANSEL, chan);
     POKE(REG_ADDRL, (unsigned char)(addr & 0xFF));
@@ -113,23 +117,23 @@ void pokeymax_channel_setup(uint8_t chan, uint16_t addr, uint16_t len,
      * IRQ at note start; our loop handler then retriggers again, producing
      * audible "constant restart" artifacts on real hardware.
      */
-    irq = PEEK(REG_IRQEN);
-    POKE(REG_IRQEN, (unsigned char)(irq & nbit));
+    pokeymax_irqen_shadow = (unsigned char)(pokeymax_irqen_shadow & nbit);
+    POKE(REG_IRQEN, pokeymax_irqen_shadow);
 
     /* Ensure DMA is off, then turn on -> clean 0->1 trigger */
-    dma = PEEK(REG_DMA);
-    if (dma & bit) {
-        POKE(REG_DMA, (unsigned char)(dma & nbit));
+    if (pokeymax_dma_shadow & bit) {
+        pokeymax_dma_shadow = (unsigned char)(pokeymax_dma_shadow & nbit);
+        POKE(REG_DMA, pokeymax_dma_shadow);
     }
-    dma = PEEK(REG_DMA);
-    POKE(REG_DMA, (unsigned char)(dma | bit));
+    pokeymax_dma_shadow = (unsigned char)(pokeymax_dma_shadow | bit);
+    POKE(REG_DMA, pokeymax_dma_shadow);
 
     /* Clear this channel's pending IRQ bit only, keep other channels */
     POKE(REG_IRQACT, nbit);
 
     /* Re-enable IRQ for this channel after start edge has completed */
-    irq = PEEK(REG_IRQEN);
-    POKE(REG_IRQEN, (unsigned char)(irq | bit));
+    pokeymax_irqen_shadow = (unsigned char)(pokeymax_irqen_shadow | bit);
+    POKE(REG_IRQEN, pokeymax_irqen_shadow);
 
     (void)mode_8bit;
 }
@@ -142,7 +146,6 @@ void pokeymax_channel_trigger(uint8_t chan, uint16_t addr, uint16_t len)
 {
     unsigned char bit  = (unsigned char)(1u << (chan - 1u));
     unsigned char nbit = (unsigned char)(~bit & 0x0Fu);
-    unsigned char dma, irq;
 
     POKE(REG_CHANSEL, chan);
     POKE(REG_ADDRL, (unsigned char)(addr & 0xFF));
@@ -151,18 +154,18 @@ void pokeymax_channel_trigger(uint8_t chan, uint16_t addr, uint16_t len)
     POKE(REG_LENH,  (unsigned char)((len-1u) >> 8));
 
     /* Mask IRQ for this channel while generating the DMA retrigger edge. */
-    irq = PEEK(REG_IRQEN);
-    POKE(REG_IRQEN, (unsigned char)(irq & nbit));
+    pokeymax_irqen_shadow = (unsigned char)(pokeymax_irqen_shadow & nbit);
+    POKE(REG_IRQEN, pokeymax_irqen_shadow);
 
-    dma = PEEK(REG_DMA);
-    POKE(REG_DMA, (unsigned char)(dma & nbit));
-    dma = PEEK(REG_DMA);
-    POKE(REG_DMA, (unsigned char)(dma | bit));
+    pokeymax_dma_shadow = (unsigned char)(pokeymax_dma_shadow & nbit);
+    POKE(REG_DMA, pokeymax_dma_shadow);
+    pokeymax_dma_shadow = (unsigned char)(pokeymax_dma_shadow | bit);
+    POKE(REG_DMA, pokeymax_dma_shadow);
 
     /* Drop the synthetic edge IRQ for this channel, then unmask IRQ again. */
     POKE(REG_IRQACT, nbit);
-    irq = PEEK(REG_IRQEN);
-    POKE(REG_IRQEN, (unsigned char)(irq | bit));
+    pokeymax_irqen_shadow = (unsigned char)(pokeymax_irqen_shadow | bit);
+    POKE(REG_IRQEN, pokeymax_irqen_shadow);
 }
 
 void pokeymax_channel_set_period_vol(uint8_t chan, uint16_t period, uint8_t vol)
@@ -177,23 +180,23 @@ void pokeymax_channel_stop(uint8_t chan)
 {
     unsigned char bit  = (unsigned char)(1u << (chan - 1u));
     unsigned char nbit = (unsigned char)(~bit & 0x0Fu);
-    unsigned char dma  = PEEK(REG_DMA);
-    POKE(REG_DMA,   (unsigned char)(dma & nbit));
-    {
-        unsigned char irq = PEEK(REG_IRQEN);
-        POKE(REG_IRQEN, (unsigned char)(irq & nbit));
-    }
+    pokeymax_dma_shadow   = (unsigned char)(pokeymax_dma_shadow & nbit);
+    pokeymax_irqen_shadow = (unsigned char)(pokeymax_irqen_shadow & nbit);
+    POKE(REG_DMA,   pokeymax_dma_shadow);
+    POKE(REG_IRQEN, pokeymax_irqen_shadow);
 }
 
 void pokeymax_channel_dma_on(uint8_t chan)
 {
     unsigned char bit = (unsigned char)(1u << (chan - 1u));
-    unsigned char dma = PEEK(REG_DMA);
-    if (!(dma & bit))
-        POKE(REG_DMA, (unsigned char)(dma | bit));
+    if (!(pokeymax_dma_shadow & bit)) {
+        pokeymax_dma_shadow = (unsigned char)(pokeymax_dma_shadow | bit);
+        POKE(REG_DMA, pokeymax_dma_shadow);
+    }
 }
 
 void pokeymax_irq_enable_all(void)
 {
-    POKE(REG_IRQEN, 0x0Fu);
+    pokeymax_irqen_shadow = 0x0Fu;
+    POKE(REG_IRQEN, pokeymax_irqen_shadow);
 }
