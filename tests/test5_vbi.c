@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <conio.h>
+#include <atari.h>
 #include "pokeymax.h"
 
 extern void vbi_install(void);
@@ -55,9 +56,13 @@ int main(void)
     while (PEEK(CH) == 255) {
         uint16_t now = vbi_ticks;
         if (now != last) {
-            printf("VBI ticks: %5u\r", (unsigned)now);
+            gotoxy(0, 7);
+            cprintf("VBI ticks: %5u", (unsigned)now);
             last = now;
         }
+
+        /* Keep this in the foreground loop, not ISR context. */
+        waitvsync();
     }
 
     vbi_remove();
