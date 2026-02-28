@@ -116,20 +116,6 @@ static void display_load_summary(void)
            (unsigned)loaded, (unsigned)adpcm, (unsigned)looped);
     printf("Audio:    %lu bytes raw -> %lu bytes PokeyMAX\n",
            (unsigned long)raw_bytes, (unsigned long)hw_bytes);
-
-    printf("Sample list (first 8 loaded):\n");
-    for (i = 1; i <= MOD_MAX_SAMPLES && shown < 8u; i++) {
-        const SampleInfo *si = &mod.samples[i];
-        if (si->length == 0u) continue;
-        printf("  %2u %-22s len=%5u %s%s\n",
-               (unsigned)i,
-               si->name[0] ? si->name : "(unnamed)",
-               (unsigned)si->length,
-               si->is_adpcm ? "ADPCM" : "PCM",
-               si->has_loop ? " loop" : "");
-        shown++;
-    }
-    if (loaded > shown) printf("  ... (%u more)\n", (unsigned)(loaded - shown));
 }
 
 static void display_status(void)
