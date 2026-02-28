@@ -49,6 +49,146 @@ static uint8_t adpcm_out[SECTOR_SIZE / 2];
 
 uint8_t mod_row_buf[MOD_CHANNELS * 4];
 
+#if defined(__CC65__)
+typedef struct {
+    uint8_t  base_row;
+    uint16_t sample_index;
+    uint16_t total_samples;
+    uint16_t sample_len;
+    uint32_t source_loaded;
+    uint32_t source_total;
+    uint32_t stored_loaded;
+    uint8_t  is_adpcm;
+    uint8_t  skipped;
+    char     sample_name[23];
+} LoadProgressUI;
+
+static void load_progress_begin(LoadProgressUI *ui, uint16_t source_total)
+{
+    ui->base_row      = wherey();
+    ui->sample_index  = 0xFFFFu;
+    ui->total_samples = 0xFFFFu;
+    ui->sample_len    = 0xFFFFu;
+    ui->source_loaded = 0xFFFFFFFFUL;
+    ui->source_total  = 0xFFFFFFFFUL;
+    ui->stored_loaded = 0xFFFFFFFFUL;
+    ui->is_adpcm      = 0xFFu;
+    ui->skipped       = 0xFFu;
+    ui->sample_name[0]= 0;
+
+    printf("Sample load progress\n");
+    printf("Sample:  0/0   Name: %-22.22s\n", "");
+    printf("Format: %-5s  Length: %5u  Status: %-7s\n", "", 0u, "");
+    printf("Source: %9lu / %9lu bytes\n", 0UL, (unsigned long)source_total);
+    printf("Stored: %9lu bytes\n", 0UL);
+    fflush(stdout);
+}
+
+static void load_progress_update(LoadProgressUI *ui,
+                                 const SampleInfo *si,
+                                 uint16_t sample_index,
+                                 uint16_t total_samples,
+                                 uint32_t source_loaded,
+                                 uint32_t source_total,
+                                 uint32_t stored_loaded,
+                                 uint8_t skipped)
+{
+    const char *name = si->name[0] ? si->name : "(unnamed)";
+    const char *fmt  = si->is_adpcm ? "ADPCM" : "PCM";
+    const char *st   = skipped ? "SKIPPED" : "OK";
+
+    if (sample_index != ui->sample_index || total_samples != ui->total_samples) {
+        gotoxy(8, ui->base_row + 1u);
+        printf("%2u/%2u", (unsigned)sample_index, (unsigned)total_samples);
+        ui->sample_index  = sample_index;
+        ui->total_samples = total_samples;
+    }
+
+    if (strncmp(name, ui->sample_name, 22u) != 0) {
+        gotoxy(20, ui->base_row + 1u);
+        printf("%-22.22s", name);
+        strncpy(ui->sample_name, name, 22u);
+        ui->sample_name[22] = 0;
+    }
+
+    if (si->is_adpcm != ui->is_adpcm) {
+        gotoxy(8, ui->base_row + 2u);
+        printf("%-5s", fmt);
+        ui->is_adpcm = si->is_adpcm;
+    }
+
+    if (si->length != ui->sample_len) {
+        gotoxy(23, ui->base_row + 2u);
+        printf("%5u", (unsigned)si->length);
+        ui->sample_len = si->length;
+    }
+
+    if (skipped != ui->skipped) {
+        gotoxy(38, ui->base_row + 2u);
+        printf("%-7s", st);
+        ui->skipped = skipped;
+    }
+
+    if (source_loaded != ui->source_loaded) {
+        gotoxy(8, ui->base_row + 3u);
+        printf("%9lu", (unsigned long)source_loaded);
+        ui->source_loaded = source_loaded;
+    }
+
+    if (source_total != ui->source_total) {
+        gotoxy(20, ui->base_row + 3u);
+        printf("%9lu", (unsigned long)source_total);
+        ui->source_total = source_total;
+    }
+
+    if (stored_loaded != ui->stored_loaded) {
+        gotoxy(8, ui->base_row + 4u);
+        printf("%9lu", (unsigned long)stored_loaded);
+        ui->stored_loaded = stored_loaded;
+    }
+
+    fflush(stdout);
+}
+
+static void load_progress_end(LoadProgressUI *ui)
+{
+    gotoxy(0, ui->base_row + 5u);
+    fflush(stdout);
+}
+#else
+static void load_progress_begin(uint32_t source_total)
+{
+    (void)source_total;
+}
+
+static void load_progress_update(const SampleInfo *si,
+                                 uint16_t sample_index,
+                                 uint16_t total_samples,
+                                 uint32_t source_loaded,
+                                 uint32_t source_total,
+                                 uint32_t stored_loaded,
+                                 uint8_t skipped)
+{
+    printf("\r[%2u/%2u] %-22.22s  %-5s  len:%5u  src:%9lu/%9lu  dst:%9lu  %-7s   ",
+           (unsigned)sample_index,
+           (unsigned)total_samples,
+           si->name[0] ? si->name : "(unnamed)",
+           si->is_adpcm ? "ADPCM" : "PCM",
+           (unsigned)si->length,
+           (unsigned long)source_loaded,
+           (unsigned long)source_total,
+           (unsigned long)stored_loaded,
+           skipped ? "SKIPPED" : "OK");
+    fflush(stdout);
+}
+
+static void load_progress_end(void)
+{
+    printf("\n");
+    fflush(stdout);
+}
+#endif
+
 static uint16_t read_be16(const uint8_t *p)
 {
     return ((uint16_t)p[0] << 8) | p[1];
@@ -137,11 +277,12 @@ uint8_t mod_load(const char *filename)
     uint8_t  loaded_samples;
     uint32_t loaded_source_bytes;
     uint32_t loaded_stored_bytes;
+    uint8_t  progress_started;
     uint8_t  had_status_output;
     uint8_t  use_adpcm_global;
     uint32_t sample_data_offset;
 #if defined(__CC65__)
-    uint8_t  status_row;
+    LoadProgressUI progress_ui;
 #endif
 
     memset(&mod, 0, sizeof(mod));
@@ -210,10 +351,8 @@ uint8_t mod_load(const char *filename)
     loaded_samples      = 0;
     loaded_source_bytes = 0;
     loaded_stored_bytes = 0;
+    progress_started    = 0;
     had_status_output   = 0;
-#if defined(__CC65__)
-    status_row          = wherey();
-#endif
 
     for (i = 1; i <= MOD_MAX_SAMPLES; i++) {
         SampleInfo *si = &mod.samples[i];
@@ -222,6 +361,15 @@ uint8_t mod_load(const char *filename)
         ADPCMState  adpcm_state;
 
         if (si->length == 0u) continue;
+
+        if (!progress_started) {
+#if defined(__CC65__)
+            load_progress_begin(&progress_ui, total_sample_bytes);
+#else
+            load_progress_begin(total_sample_bytes);
+#endif
+            progress_started = 1;
+        }
 
         /*
          * ADPCM + sample-end loop retrigger causes decoder state reset in hardware
@@ -239,18 +387,23 @@ uint8_t mod_load(const char *filename)
         ram_addr = pokeymax_alloc(ram_needed);
         if (ram_addr == POKEYMAX_ALLOC_FAIL) {
 #if defined(__CC65__)
-            gotoxy(0, status_row);
+            load_progress_update(&progress_ui,
+                                 si,
+                                 (uint16_t)(loaded_samples + 1u),
+                                 total_samples_to_load,
+                                 loaded_source_bytes,
+                                 total_sample_bytes,
+                                 loaded_stored_bytes,
+                                 1u);
+#else
+            load_progress_update(si,
+                                 (uint16_t)(loaded_samples + 1u),
+                                 total_samples_to_load,
+                                 loaded_source_bytes,
+                                 total_sample_bytes,
+                                 loaded_stored_bytes,
+                                 1u);
 #endif
-            printf("\rLoading \"%s\" (%u bytes, %s) | sample %u/%u | source %lu/%lu bytes | stored %lu bytes [SKIPPED: no RAM]   ",
-                   si->name[0] ? si->name : "(unnamed)",
-                   (unsigned)si->length,
-                   si->is_adpcm ? "ADPCM" : "PCM",
-                   (unsigned)(loaded_samples + 1u),
-                   (unsigned)total_samples_to_load,
-                   (unsigned long)loaded_source_bytes,
-                   (unsigned long)total_sample_bytes,
-                   (unsigned long)loaded_stored_bytes);
-            fflush(stdout);
             had_status_output = 1;
             fseek(mod_file, (long)si->length, SEEK_CUR);
             si->length = 0;
@@ -280,18 +433,23 @@ uint8_t mod_load(const char *filename)
             remaining -= chunk;
 
 #if defined(__CC65__)
-            gotoxy(0, status_row);
+            load_progress_update(&progress_ui,
+                                 si,
+                                 (uint16_t)(loaded_samples + 1u),
+                                 total_samples_to_load,
+                                 (uint32_t)(loaded_source_bytes + (si->length - remaining)),
+                                 total_sample_bytes,
+                                 (uint32_t)(loaded_stored_bytes + written),
+                                 0u);
+#else
+            load_progress_update(si,
+                                 (uint16_t)(loaded_samples + 1u),
+                                 total_samples_to_load,
+                                 (uint32_t)(loaded_source_bytes + (si->length - remaining)),
+                                 total_sample_bytes,
+                                 (uint32_t)(loaded_stored_bytes + written),
+                                 0u);
 #endif
-            printf("\rLoading \"%s\" (%u bytes, %s) | sample %u/%u | source %lu/%lu bytes | stored %lu bytes   ",
-                   si->name[0] ? si->name : "(unnamed)",
-                   (unsigned)si->length,
-                   si->is_adpcm ? "ADPCM" : "PCM",
-                   (unsigned)(loaded_samples + 1u),
-                   (unsigned)total_samples_to_load,
-                   (unsigned long)(loaded_source_bytes + (si->length - remaining)),
-                   (unsigned long)total_sample_bytes,
-                   (unsigned long)(loaded_stored_bytes + written));
-            fflush(stdout);
             had_status_output = 1;
         }
 
@@ -301,8 +459,11 @@ uint8_t mod_load(const char *filename)
     }
 
     if (had_status_output) {
-        printf("\n");
-        fflush(stdout);
+#if defined(__CC65__)
+        load_progress_end(&progress_ui);
+#else
+        load_progress_end();
+#endif
     }
 
     /* Pre-load pattern for order 0 into current buffer */
