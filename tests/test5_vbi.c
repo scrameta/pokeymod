@@ -16,6 +16,7 @@
 #include <stdint.h>
 #include <conio.h>
 #include <atari.h>
+#include <stdlib.h>
 #include "pokeymax.h"
 
 extern void vbi_install(void);
@@ -41,6 +42,7 @@ void pokeymax_loop_handler(void)
 
 int main(void)
 {
+    char buf[6];
     uint16_t last = 0;
 
     clrscr();
@@ -57,7 +59,10 @@ int main(void)
         uint16_t now = vbi_ticks;
         if (now != last) {
             gotoxy(0, 7);
-            cprintf("VBI ticks: %5u", (unsigned)now);
+            cputs("VBI ticks:      ");
+            utoa((unsigned)now, buf, 10);
+            gotoxy(11, 7);
+            cputs(buf);
             last = now;
         }
 
