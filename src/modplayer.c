@@ -89,6 +89,7 @@ static void trigger_sample(uint8_t hw_chan, ChanState *cs)
     if (cs->sample_num == 0 || cs->sample_num > MOD_MAX_SAMPLES) return;
     si = &mod.samples[cs->sample_num];
     if (si->length == 0) return;
+    if (si->pokeymax_len == 0) return;
     if (cs->period == 0) return;
 
     hw_period = period_to_hw(cs->period);
@@ -147,11 +148,19 @@ static void process_row(void)
         cs->note_delay_ticks  = 0;
         cs->note_cut_tick     = 0;
 
-        /* New sample number: latch volume */
-        if (note.sample != 0) {
+        /* New sample number: latch volume (guard invalid sample numbers) */
+        if (note.sample > MOD_MAX_SAMPLES) {
+            note.sample = 0u;
+        }
+        if (note.sample != 0u) {
             cs->sample_num = note.sample;
             cs->volume     = mod.samples[note.sample].volume;
             cs->hw_vol     = scale_volume(cs->volume);
+        }
+
+        /* Defensive: invalid latched sample from corrupt pattern data */
+        if (cs->sample_num > MOD_MAX_SAMPLES) {
+            cs->sample_num = 0u;
         }
 
         /* New period (unless portamento) */
@@ -240,6 +249,11 @@ static void process_row(void)
                 break;
             }
             default: break;
+        }
+
+        /* MOD periods are normally in ~113..856 range; ignore junk */
+        if (note.period != 0u && (note.period < 28u || note.period > 4095u)) {
+            note.period = 0u;
         }
 
         /* Trigger sample if we have a new note (period != 0) */
