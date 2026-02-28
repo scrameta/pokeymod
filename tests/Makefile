@@ -5,30 +5,35 @@
 #   make test2       - MOD header dump
 #   make test3       - sine tone test (no MOD file needed)
 #   make test4       - first row trigger test
+#   make test5       - deferred VBI hook counter test
+#   make test6       - PokeyMAX sample IRQ counter test
 #   make all         - build everything
 #   make clean       - remove all build artefacts
 
 TARGET  = atari
-CFLAGS  = -t $(TARGET) -O --include-dir include
+CFLAGS  = -t $(TARGET) -O --include-dir ../include
 ASFLAGS = -t $(TARGET)
 
 # --- Shared sources (used by player and tests) ---
-SHARED_C = src/pokeymax_hw.c src/adpcm.c src/tables.c
+SHARED_C = ../src/pokeymax_hw.c ../src/adpcm.c ../src/tables.c
 
 # --- Main player ---
-PLAYER_C = src/main.c src/modplayer.c src/mod_loader.c \
-           src/loop_handler.c $(SHARED_C)
-PLAYER_S = src/vbi_handler.s
+PLAYER_C = ../src/main.c ../src/modplayer.c ../src/mod_loader.c \
+           ../src/loop_handler.c $(SHARED_C)
+PLAYER_S = ../src/vbi_handler.s
 PLAYER_O = $(PLAYER_C:.c=.o) $(PLAYER_S:.s=.o)
 
 # --- Tests (each is a single .c + shared) ---
-TEST2_C  = tests/test2_header.c
-TEST3_C  = tests/test3_tone.c    $(SHARED_C)
-TEST4_C  = tests/test4_firstrow.c $(SHARED_C)
+TEST2_C  = test2_header.c
+TEST3_C  = test3_tone.c    $(SHARED_C)
+TEST4_C  = test4_firstrow.c $(SHARED_C)
+TEST5_C  = test5_vbi.c
+TEST6_C  = test6_irq.c     ../src/pokeymax_hw.c
+TEST56_S = ../src/vbi_handler.s
 
-.PHONY: all player test2 test3 test4 clean
+.PHONY: all player test2 test3 test4 test5 test6 clean
 
-all: modplay.xex test2.xex test3.xex test4.xex
+all: modplay.xex test2.xex test3.xex test4.xex test5.xex test6.xex
 
 player: modplay.xex
 
@@ -49,7 +54,14 @@ test4.xex: $(TEST4_C)
 	cl65 $(CFLAGS) -o test4.xex $(TEST4_C)
 	@echo "Built: test4.xex"
 
-clean:
-	rm -f modplay.xex modplay.map test2.xex test3.xex test4.xex
-	rm -f src/*.o tests/*.o 
+test5.xex: $(TEST5_C) $(TEST56_S)
+	cl65 $(CFLAGS) -o test5.xex $(TEST5_C) $(TEST56_S)
+	@echo "Built: test5.xex"
 
+test6.xex: $(TEST6_C) $(TEST56_S)
+	cl65 $(CFLAGS) -o test6.xex $(TEST6_C) $(TEST56_S)
+	@echo "Built: test6.xex"
+
+clean:
+	rm -f modplay.xex modplay.map test2.xex test3.xex test4.xex test5.xex test6.xex
+	rm -f ../src/*.o *.o 

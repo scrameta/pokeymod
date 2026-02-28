@@ -1,0 +1,69 @@
+/*
+ * test5_vbi.c - Verify deferred VBI hook runs reliably
+ *
+ * This uses the same vbi_handler.s as the player, but replaces
+ * mod_vbi_tick() with a tiny counter so we can validate that:
+ *   - vbi_install()/vbi_remove() works
+ *   - our deferred VBI callback runs every frame
+ *   - ISR save/restore does not crash the main loop
+ *
+ * Expected on Atari:
+ *   - vbi_ticks keeps increasing while running
+ *   - screen border color changes once per 16 VBIs
+ */
+
+#include <stdio.h>
+#include <stdint.h>
+#include <conio.h>
+#include "pokeymax.h"
+
+extern void vbi_install(void);
+extern void vbi_remove(void);
+
+static volatile uint16_t vbi_ticks = 0;
+
+/* Required by src/vbi_handler.s */
+void mod_vbi_tick(void)
+{
+    ++vbi_ticks;
+
+    /* Visible heartbeat: cycle border color every 16 ticks */
+    if ((vbi_ticks & 0x0F) == 0) {
+        POKE(0xD01A, (unsigned char)((PEEK(0xD01A) + 1) & 0x0F));
+    }
+}
+
+/* Required by src/vbi_handler.s (not used in this test) */
+void pokeymax_loop_handler(void)
+{
+}
+
+int main(void)
+{
+    uint16_t last = 0;
+
+    clrscr();
+    printf("Test 5: Deferred VBI\n");
+    printf("--------------------\n");
+    printf("Installs player VBI hook only.\n\n");
+    printf("Expected: ticks keep increasing.\n");
+    printf("Press any key to stop.\n\n");
+
+    POKE(CH, 255);
+    vbi_install();
+
+    while (PEEK(CH) == 255) {
+        uint16_t now = vbi_ticks;
+        if (now != last) {
+            printf("VBI ticks: %5u\r", (unsigned)now);
+            last = now;
+        }
+    }
+
+    vbi_remove();
+    POKE(0xD01A, 0x00);
+    POKE(CH, 255);
+
+    printf("\nStopped at %u ticks.\n", (unsigned)vbi_ticks);
+    return 0;
+}

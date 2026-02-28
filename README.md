@@ -136,6 +136,22 @@ make
 
 Output: `modplay.xex`
 
+### Build Atari diagnostic tests
+
+```bash
+make -C tests test2 test3 test4 test5 test6
+```
+
+New diagnostics to isolate interrupt issues:
+
+- `test5.xex`: installs the same deferred VBI hook as the player and
+  increments a counter in `mod_vbi_tick()`. If this hangs or the counter
+  stalls, the VBI integration path is suspect.
+- `test6.xex`: installs the same IRQ hook as the player and generates
+  repeated PokeyMAX sample-end IRQs on channel 1, counting calls to
+  `pokeymax_loop_handler()`. If this stalls while `test5` works, the IRQ
+  path is suspect.
+
 ### Optional: Create ATR disk image
 
 ```bash
