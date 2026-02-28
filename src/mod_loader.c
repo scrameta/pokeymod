@@ -130,6 +130,10 @@ uint8_t mod_load(const char *filename)
     uint8_t  two[2];
     uint8_t  magic[4];
     uint32_t total_sample_bytes;
+    uint8_t  total_samples_to_load;
+    uint8_t  loaded_samples;
+    uint32_t loaded_source_bytes;
+    uint32_t loaded_stored_bytes;
     uint8_t  use_adpcm_global;
     uint32_t sample_data_offset;
 
@@ -146,6 +150,7 @@ uint8_t mod_load(const char *filename)
     (void)title;
 
     total_sample_bytes = 0;
+    total_samples_to_load = 0;
     for (i = 1; i <= MOD_MAX_SAMPLES; i++) {
         SampleInfo *si = &mod.samples[i];
         uint8_t j;
@@ -167,7 +172,10 @@ uint8_t mod_load(const char *filename)
         si->has_loop   = (si->loop_len > 2u) ? 1u : 0u;
         if (si->has_loop && (si->loop_start + si->loop_len) > si->length)
             si->loop_len = si->length - si->loop_start;
-        if (si->length > 0u) total_sample_bytes += si->length;
+        if (si->length > 0u) {
+            total_sample_bytes += si->length;
+            total_samples_to_load++;
+        }
     }
 
     if (fread(two, 1, 2, mod_file) != 2) return 1;
@@ -192,6 +200,9 @@ uint8_t mod_load(const char *filename)
     if (fseek(mod_file, (long)sample_data_offset, SEEK_SET) != 0) return 1;
 
     pokeymax_init();
+    loaded_samples      = 0;
+    loaded_source_bytes = 0;
+    loaded_stored_bytes = 0;
 
     for (i = 1; i <= MOD_MAX_SAMPLES; i++) {
         SampleInfo *si = &mod.samples[i];
@@ -216,6 +227,16 @@ uint8_t mod_load(const char *filename)
 
         ram_addr = pokeymax_alloc(ram_needed);
         if (ram_addr == POKEYMAX_ALLOC_FAIL) {
+            printf("\rLoading \"%s\" (%u bytes, %s) | sample %u/%u | source %lu/%lu bytes | stored %lu bytes [SKIPPED: no RAM]\n",
+                   si->name[0] ? si->name : "(unnamed)",
+                   (unsigned)si->length,
+                   si->is_adpcm ? "ADPCM" : "PCM",
+                   (unsigned)(loaded_samples + 1u),
+                   (unsigned)total_samples_to_load,
+                   (unsigned long)loaded_source_bytes,
+                   (unsigned long)total_sample_bytes,
+                   (unsigned long)loaded_stored_bytes);
+            fflush(stdout);
             fseek(mod_file, (long)si->length, SEEK_CUR);
             si->length = 0;
             continue;
@@ -242,7 +263,24 @@ uint8_t mod_load(const char *filename)
                 written += chunk;
             }
             remaining -= chunk;
+
+            printf("\rLoading \"%s\" (%u bytes, %s) | sample %u/%u | source %lu/%lu bytes | stored %lu bytes",
+                   si->name[0] ? si->name : "(unnamed)",
+                   (unsigned)si->length,
+                   si->is_adpcm ? "ADPCM" : "PCM",
+                   (unsigned)(loaded_samples + 1u),
+                   (unsigned)total_samples_to_load,
+                   (unsigned long)(loaded_source_bytes + (si->length - remaining)),
+                   (unsigned long)total_sample_bytes,
+                   (unsigned long)(loaded_stored_bytes + written));
+            fflush(stdout);
         }
+
+        loaded_samples++;
+        loaded_source_bytes += si->length;
+        loaded_stored_bytes += si->pokeymax_len;
+        printf("\n");
+        fflush(stdout);
     }
 
     /* Pre-load pattern for order 0 into current buffer */
