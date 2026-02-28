@@ -164,7 +164,8 @@ int main(void)
     printf("fseek OK\n");
 
     /* --- Upload samples --- */
-    use_adpcm = (total_sample_bytes > (uint32_t)POKEYMAX_RAM_SIZE) ? 1 : 0;
+    use_adpcm = 1; 
+    //use_adpcm = (total_sample_bytes > (uint32_t)POKEYMAX_RAM_SIZE) ? 1 : 0;
     printf("Uploading samples (adpcm=%d)...\n", use_adpcm);
 
     for (i = 1; i <= MOD_MAX_SAMPLES; i++) {
