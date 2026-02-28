@@ -35,10 +35,11 @@ TEST8_C  = tests/test8_irq_during_foreground.c src/pokeymax_hw.c
 TEST9_C  = tests/test9_startup_path.c src/pokeymax_hw.c src/mod_loader.c src/modplayer.c src/tables.c src/adpcm.c src/loop_handler.c
 TEST9B_C = tests/test9b_startup_noirq.c src/pokeymax_hw.c src/mod_loader.c src/modplayer.c src/tables.c src/adpcm.c src/loop_handler.c
 TEST10_C = tests/test10_main_startup_markers.c src/pokeymax_hw.c src/mod_loader.c src/modplayer.c src/tables.c src/adpcm.c src/loop_handler.c
+TEST11_C = tests/test11_row0_decode.c src/pokeymax_hw.c src/mod_loader.c src/modplayer.c src/tables.c src/adpcm.c src/loop_handler.c
 TEST56_S = src/vbi_handler.s
 
-all: modplay.xex test2.xex test3.xex test3ad.xex test4.xex test5.xex test6.xex test7.xex test8.xex test9.xex test9b.xex test10.xex
-.PHONY: all player test2 test3 test3-adpcm test4 test5 test6 test7 test8 test9 test9b test10 test-adpcm-linux clean
+all: modplay.xex test2.xex test3.xex test3ad.xex test4.xex test5.xex test6.xex test7.xex test8.xex test9.xex test9b.xex test10.xex test11.xex
+.PHONY: all player test2 test3 test3-adpcm test4 test5 test6 test7 test8 test9 test9b test10 test11 test-adpcm-linux clean
 
 player: modplay.xex
 
@@ -85,6 +86,9 @@ test9b.xex: $(TEST9B_C)
 test10.xex: $(TEST10_C) $(TEST56_S)
 	cl65 $(CFLAGS) -o test10.xex $(TEST10_C) $(TEST56_S)
 	@echo "Built: test10.xex"
+test11.xex: $(TEST11_C) $(TEST56_S)
+	cl65 $(CFLAGS) -o test11.xex $(TEST11_C) $(TEST56_S)
+	@echo "Built: test11.xex"
 test-adpcm-linux: tests/adpcm_roundtrip_linux.c src/adpcm.c include/adpcm.h
 	gcc -std=c99 -O2 -Wall -Wextra -Iinclude -o tests/adpcm_roundtrip_linux tests/adpcm_roundtrip_linux.c src/adpcm.c -lm
 	./tests/adpcm_roundtrip_linux
