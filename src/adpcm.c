@@ -3,15 +3,12 @@
  *
  * Encodes 8-bit signed PCM to 4-bit IMA ADPCM (4:1 compression).
  * PokeyMAX block RAM holds ~43KB; ADPCM extends effective capacity to ~168KB.
- *
- * Fix: predictor arithmetic must use int32_t to avoid overflow before clamp.
- * Fix: output byte needs sign bit inverted to match PokeyMAX bit7 inversion.
  */
 
 #include <stdint.h>
 #include "adpcm.h"
 
-static const uint16_t ima_step_table[89] = {
+const uint16_t ima_step_table[89] = {
         7,     8,     9,    10,    11,    12,    13,    14,
        16,    17,    19,    21,    23,    25,    28,    31,
        34,    37,    41,    45,    50,    55,    60,    66,
@@ -26,46 +23,49 @@ static const uint16_t ima_step_table[89] = {
        32767
 };
 
-static const int8_t ima_index_table[16] = {
+const int8_t ima_index_table[16] = {
     -1, -1, -1, -1, 2, 4, 6, 8,
     -1, -1, -1, -1, 2, 4, 6, 8
 };
 
 /*
  * Encode one 8-bit signed PCM sample to a 4-bit ADPCM nibble.
- * predictor arithmetic uses int32_t to prevent overflow before clamp.
+ * Use int32_t for predictor math so clamp happens before any narrowing.
  */
-static uint8_t adpcm_encode_sample(int8_t pcm_sample, ADPCMState *state)
+uint8_t adpcm_encode_sample(int8_t pcm_sample, ADPCMState *state)
 {
     int32_t diff;
     int32_t step;
-    int32_t pred;
+    int32_t pred_delta;
+    int32_t next_pred;
     uint8_t nibble;
     int8_t  idx;
-    /* Scale 8-bit sample to 16-bit range for predictor comparison */
-    int32_t pcm16 = (int32_t)(int16_t)((int16_t)pcm_sample << 8);
+    int32_t pcm16 = (int32_t)((int16_t)pcm_sample << 8);
 
     step = (int32_t)ima_step_table[state->step_index];
     diff = pcm16 - (int32_t)state->predictor;
 
     nibble = 0;
-    if (diff < 0) { nibble = 8; diff = -diff; }
+    if (diff < 0) {
+        nibble = 8;
+        diff = -diff;
+    }
 
-    pred = step >> 3;
-    if (diff >= step)       { nibble |= 4; diff -= step; pred += step; }
+    pred_delta = step >> 3;
+    if (diff >= step)       { nibble |= 4; diff -= step; pred_delta += step; }
     step >>= 1;
-    if (diff >= step)       { nibble |= 2; diff -= step; pred += step; }
+    if (diff >= step)       { nibble |= 2; diff -= step; pred_delta += step; }
     step >>= 1;
-    if (diff >= step)       { nibble |= 1;               pred += step; }
+    if (diff >= step)       { nibble |= 1;               pred_delta += step; }
 
     if (nibble & 8)
-        state->predictor -= (int16_t)pred;
+        next_pred = (int32_t)state->predictor - pred_delta;
     else
-        state->predictor += (int16_t)pred;
+        next_pred = (int32_t)state->predictor + pred_delta;
 
-    /* Clamp - now safe since pred arithmetic was int32 */
-    if ((int32_t)state->predictor > 32767l)  state->predictor =  32767l;
-    if ((int32_t)state->predictor < -32768l) state->predictor = -32768l;
+    if (next_pred > 32767l)  next_pred = 32767l;
+    if (next_pred < -32768l) next_pred = -32768l;
+    state->predictor = (int16_t)next_pred;
 
     idx = (int8_t)state->step_index + ima_index_table[nibble & 0x0F];
     if (idx < 0)  idx = 0;
@@ -75,15 +75,6 @@ static uint8_t adpcm_encode_sample(int8_t pcm_sample, ADPCMState *state)
     return nibble & 0x0F;
 }
 
-/*
- * Encode a block of 8-bit signed PCM samples to packed 4-bit ADPCM nibbles.
- * Two nibbles per output byte, low nibble first.
- * Returns number of output bytes written.
- *
- * PokeyMAX bit-7 inversion: hardware does not(ram_data(7)) when storing.
- * For ADPCM the inversion is already handled in the VHDL store path,
- * so ADPCM nibbles are written as-is (no inversion needed here).
- */
 uint16_t adpcm_encode_block(const int8_t *src, uint16_t pcm_len,
                              uint8_t *dst, ADPCMState *state)
 {

@@ -26,7 +26,7 @@ TEST2_C  = tests/test2_header.c
 TEST3_C  = tests/test3_tone.c    $(SHARED_C)
 TEST4_C  = tests/test4_firstrow.c $(SHARED_C)
 
-.PHONY: all player test2 test3 test4 clean
+.PHONY: all player test2 test3 test4 test-adpcm-linux clean
 
 all: modplay.xex test2.xex test3.xex test4.xex
 
@@ -48,6 +48,10 @@ test3.xex: $(TEST3_C)
 test4.xex: $(TEST4_C)
 	cl65 $(CFLAGS) -o test4.xex $(TEST4_C)
 	@echo "Built: test4.xex"
+
+test-adpcm-linux: tests/adpcm_roundtrip_linux.c src/adpcm.c include/adpcm.h
+	gcc -std=c99 -O2 -Wall -Wextra -Iinclude -o tests/adpcm_roundtrip_linux tests/adpcm_roundtrip_linux.c src/adpcm.c -lm
+	./tests/adpcm_roundtrip_linux
 
 clean:
 	rm -f modplay.xex modplay.map test2.xex test3.xex test4.xex
