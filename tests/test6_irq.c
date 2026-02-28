@@ -17,6 +17,7 @@
 #include <stdint.h>
 #include <conio.h>
 #include <atari.h>
+#include <stdlib.h>
 #include "pokeymax.h"
 #include "pokeymax_hw.h"
 
@@ -62,6 +63,8 @@ static uint8_t detect_sample_player(void)
 
 int main(void)
 {
+    char irq_buf[6];
+    char vbi_buf[6];
     uint16_t last_irq = 0;
 
     clrscr();
@@ -82,12 +85,13 @@ int main(void)
     /* Install player VBI+IRQ hooks */
     vbi_install();
 
-    /* Trigger channel 1 once; foreground loop retriggers after IRQ ACK. */
-    pokeymax_channel_setup(1, 0, (uint16_t)sizeof(pulse_sample), 428, 40, 1, 0);
-
     printf("IRQ test running.\n");
     printf("Expected: IRQ count increases.\n");
     printf("Press any key to stop.\n\n");
+
+    /* Trigger channel 1 once; foreground loop retriggers after IRQ ACK. */
+    POKE(REG_IRQACT, 0x00);
+    pokeymax_channel_setup(1, 0, (uint16_t)sizeof(pulse_sample), 428, 40, 1, 0);
 
     POKE(CH, 255);
     while (PEEK(CH) == 255) {
@@ -99,7 +103,13 @@ int main(void)
         uint16_t now = irq_count;
         if (now != last_irq) {
             gotoxy(0, 8);
-            cprintf("IRQ: %5u  VBI: %5u", (unsigned)now, (unsigned)vbi_count);
+            cputs("IRQ:       VBI:      ");
+            utoa((unsigned)now, irq_buf, 10);
+            utoa((unsigned)vbi_count, vbi_buf, 10);
+            gotoxy(5, 8);
+            cputs(irq_buf);
+            gotoxy(16, 8);
+            cputs(vbi_buf);
 
             if ((now & 0x0F) == 0) {
                 POKE(0xD01A, (unsigned char)((PEEK(0xD01A) + 1) & 0x0F));
