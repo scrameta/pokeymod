@@ -114,9 +114,17 @@ void pokeymax_channel_setup(uint8_t chan, uint16_t addr, uint16_t len,
     pokeymax_samcfg_shadow = cfg;
     POKE(REG_SAMCFG, pokeymax_samcfg_shadow);
 
-    /* Enable IRQ for this channel */
+    /*
+     * IMPORTANT: a DMA bit toggle raises syncreset in PokeyMAX and can
+     * generate an immediate irq_trigger pulse. Keep IRQ masked while we
+     * do the 0->1 start edge, then clear any stale latch and unmask.
+     *
+     * If IRQ is enabled before the DMA edge, hardware can fire an instant
+     * IRQ at note start; our loop handler then retriggers again, producing
+     * audible "constant restart" artifacts on real hardware.
+     */
     irq = PEEK(REG_IRQEN);
-    POKE(REG_IRQEN, (unsigned char)(irq | bit));
+    POKE(REG_IRQEN, (unsigned char)(irq & nbit));
 
     /* Ensure DMA is off, then turn on -> clean 0->1 trigger */
     dma = PEEK(REG_DMA);
@@ -125,6 +133,13 @@ void pokeymax_channel_setup(uint8_t chan, uint16_t addr, uint16_t len,
     }
     dma = PEEK(REG_DMA);
     POKE(REG_DMA, (unsigned char)(dma | bit));
+
+    /* Clear this channel's pending IRQ bit only, keep other channels */
+    POKE(REG_IRQACT, nbit);
+
+    /* Re-enable IRQ for this channel after start edge has completed */
+    irq = PEEK(REG_IRQEN);
+    POKE(REG_IRQEN, (unsigned char)(irq | bit));
 
     (void)mode_8bit;
 }
@@ -137,7 +152,7 @@ void pokeymax_channel_trigger(uint8_t chan, uint16_t addr, uint16_t len)
 {
     unsigned char bit  = (unsigned char)(1u << (chan - 1u));
     unsigned char nbit = (unsigned char)(~bit & 0x0Fu);
-    unsigned char dma;
+    unsigned char dma, irq;
 
     POKE(REG_CHANSEL, chan);
     POKE(REG_ADDRL, (unsigned char)(addr & 0xFF));
@@ -145,10 +160,19 @@ void pokeymax_channel_trigger(uint8_t chan, uint16_t addr, uint16_t len)
     POKE(REG_LENL,  (unsigned char)((len-1u) & 0xFF));  /* doc: Length=L+H*256+1 */
     POKE(REG_LENH,  (unsigned char)((len-1u) >> 8));
 
+    /* Mask IRQ for this channel while generating the DMA retrigger edge. */
+    irq = PEEK(REG_IRQEN);
+    POKE(REG_IRQEN, (unsigned char)(irq & nbit));
+
     dma = PEEK(REG_DMA);
     POKE(REG_DMA, (unsigned char)(dma & nbit));
     dma = PEEK(REG_DMA);
     POKE(REG_DMA, (unsigned char)(dma | bit));
+
+    /* Drop the synthetic edge IRQ for this channel, then unmask IRQ again. */
+    POKE(REG_IRQACT, nbit);
+    irq = PEEK(REG_IRQEN);
+    POKE(REG_IRQEN, (unsigned char)(irq | bit));
 }
 
 void pokeymax_channel_set_period_vol(uint8_t chan, uint16_t period, uint8_t vol)

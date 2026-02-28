@@ -111,8 +111,6 @@ static void trigger_sample(uint8_t hw_chan, ChanState *cs)
                            cs->is_8bit,
                            cs->is_adpcm);
 
-    /* Enable DMA for this channel now that it is configured */
-    pokeymax_channel_dma_on(hw_chan);
 }
 
 /* -------------------------------------------------------
