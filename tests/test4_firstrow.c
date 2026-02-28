@@ -164,7 +164,6 @@ int main(void)
     printf("fseek OK\n");
 
     /* --- Upload samples --- */
-    //use_adpcm = 1; //(total_sample_bytes > (uint32_t)POKEYMAX_RAM_SIZE) ? 1 : 0;
     use_adpcm = (total_sample_bytes > (uint32_t)POKEYMAX_RAM_SIZE) ? 1 : 0;
     printf("Uploading samples (adpcm=%d)...\n", use_adpcm);
 
@@ -176,7 +175,7 @@ int main(void)
 
         if (si->length == 0) continue;
 
-        if (use_adpcm && si->length > 512) {
+        if (use_adpcm && si->length > 512 && !si->has_loop) {
             ram_needed = (si->length + 1) / 2;
             si->is_adpcm = 1; si->is_8bit = 0;
         } else {
@@ -206,7 +205,8 @@ int main(void)
             if (si->is_adpcm) {
                 out_len = adpcm_encode_block((const int8_t*)sector_buf, chunk,
                                              adpcm_out, &adpcm_state);
-                pokeymax_write_ram(ram_addr + written, adpcm_out, out_len);
+                /* ADPCM data is already encoded nibbles; write raw bytes. */
+                pokeymax_write_ram_raw(ram_addr + written, adpcm_out, out_len);
                 written += out_len;
             } else {
                 pokeymax_write_ram(ram_addr + written, sector_buf, chunk);
