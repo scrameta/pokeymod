@@ -27,6 +27,18 @@ static volatile uint16_t irq_count = 0;
 static volatile uint16_t vbi_count = 0;
 static volatile uint8_t irq_pending = 0;
 
+static uint16_t read_tick_stable(volatile uint16_t* p)
+{
+    uint8_t hi1, lo, hi2;
+    do {
+        hi1 = ((volatile uint8_t*)p)[1];
+        lo  = ((volatile uint8_t*)p)[0];
+        hi2 = ((volatile uint8_t*)p)[1];
+    } while (hi1 != hi2);
+    return (uint16_t)(((uint16_t)hi1 << 8) | lo);
+}
+
+
 static const uint8_t pulse_sample[32] = {
     0, 32, 64, 96, 127, 96, 64, 32,
     0, -32, -64, -96, -127, -96, -64, -32,
@@ -82,12 +94,12 @@ int main(void)
     /* Install player VBI+IRQ hooks */
     vbi_install();
 
-    /* Trigger channel 1 once; foreground loop retriggers after IRQ ACK. */
-    pokeymax_channel_setup(1, 0, (uint16_t)sizeof(pulse_sample), 428, 40, 1, 0);
-
     printf("IRQ test running.\n");
     printf("Expected: IRQ count increases.\n");
     printf("Press any key to stop.\n\n");
+
+    /* Start after text is rendered so IRQ activity can't starve setup prints. */
+    pokeymax_channel_setup(1, 0, (uint16_t)sizeof(pulse_sample), 856, 40, 1, 0);
 
     POKE(CH, 255);
     while (PEEK(CH) == 255) {
@@ -96,10 +108,10 @@ int main(void)
             pokeymax_channel_trigger(1, 0, (uint16_t)sizeof(pulse_sample));
         }
 
-        uint16_t now = irq_count;
+        uint16_t now = read_tick_stable(&irq_count);
         if (now != last_irq) {
             gotoxy(0, 8);
-            cprintf("IRQ: %5u  VBI: %5u", (unsigned)now, (unsigned)vbi_count);
+            cprintf("IRQ: %5u  VBI: %5u", (unsigned)now, (unsigned)read_tick_stable(&vbi_count));
 
             if ((now & 0x0F) == 0) {
                 POKE(0xD01A, (unsigned char)((PEEK(0xD01A) + 1) & 0x0F));
@@ -117,6 +129,6 @@ int main(void)
 
     POKE(0xD01A, 0x00);
     POKE(CH, 255);
-    printf("\nStopped IRQ=%u VBI=%u\n", (unsigned)irq_count, (unsigned)vbi_count);
+    printf("\nStopped IRQ=%u VBI=%u\n", (unsigned)read_tick_stable(&irq_count), (unsigned)read_tick_stable(&vbi_count));
     return 0;
 }

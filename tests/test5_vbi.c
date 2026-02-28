@@ -18,6 +18,17 @@
 #include <atari.h>
 #include "pokeymax.h"
 
+static uint16_t read_tick_stable(volatile uint16_t* p)
+{
+    uint8_t hi1, lo, hi2;
+    do {
+        hi1 = ((volatile uint8_t*)p)[1];
+        lo  = ((volatile uint8_t*)p)[0];
+        hi2 = ((volatile uint8_t*)p)[1];
+    } while (hi1 != hi2);
+    return (uint16_t)(((uint16_t)hi1 << 8) | lo);
+}
+
 extern void vbi_install(void);
 extern void vbi_remove(void);
 
@@ -54,7 +65,7 @@ int main(void)
     vbi_install();
 
     while (PEEK(CH) == 255) {
-        uint16_t now = vbi_ticks;
+        uint16_t now = read_tick_stable(&vbi_ticks);
         if (now != last) {
             gotoxy(0, 7);
             cprintf("VBI ticks: %5u", (unsigned)now);
@@ -69,6 +80,6 @@ int main(void)
     POKE(0xD01A, 0x00);
     POKE(CH, 255);
 
-    printf("\nStopped at %u ticks.\n", (unsigned)vbi_ticks);
+    printf("\nStopped at %u ticks.\n", (unsigned)read_tick_stable(&vbi_ticks));
     return 0;
 }

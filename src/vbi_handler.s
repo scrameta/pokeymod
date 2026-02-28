@@ -26,11 +26,12 @@ XITVBV      = $E462     ; OS: exit deferred VBI
 
 SAM_IRQACT  = $D292     ; PokeyMAX sample end IRQ active/clear
 
-; cc65 zero page on Atari target starts at $82.
-; It uses 26 bytes ($1A): sp, sreg, regsave, ptr1-4, tmp1-4, regbank
-; i.e. $82..$9B. Save/restore all of these when calling C from ISR.
-ZP_SAVE_START = $82
-ZP_SAVE_LEN   = 26     ; save $82..$9B
+; Be conservative with cc65 zero-page preservation from ISR context.
+; Different cc65 versions / runtime options can expand ZP usage,
+; and partial saves cause rare foreground corruption (garbled cprintf,
+; runaway cursor movement, random values). Save full Atari cc65 user ZP.
+ZP_SAVE_START = $80
+ZP_SAVE_LEN   = 128    ; save $80..$FF
 
 ;--------------------------------------------------------------
 ; Saved vectors
