@@ -107,41 +107,46 @@ static void trigger_sample(uint8_t hw_chan, ChanState *cs)
  * ------------------------------------------------------- */
 static void process_row(void)
 {
-    uint8_t ch;
-    uint8_t pattern;
+    uint8_t        ch;
+    uint8_t        pattern;
+    const uint8_t *row_data;
 
     pattern = mod.order_table[mod.order_pos];
-    if (mod_read_row(pattern, mod.row) != 0) return;
+    if (mod_get_row_ptr(pattern, mod.row, &row_data) != 0) return;
 
     mod.pattern_break = 0;
     mod.do_jump       = 0;
 
     for (ch = 0; ch < MOD_CHANNELS; ch++) {
-        Note       note;
         ChanState *cs = &mod.chan[ch];
         uint8_t    hw = (uint8_t)(ch + 1u);
-        MODNote    raw;
+        uint8_t    b0 = row_data[ch * 4u + 0u];
+        uint8_t    b1 = row_data[ch * 4u + 1u];
+        uint8_t    b2 = row_data[ch * 4u + 2u];
+        uint8_t    b3 = row_data[ch * 4u + 3u];
+        uint8_t    note_sample;
+        uint16_t   note_period;
+        uint8_t    note_effect;
+        uint8_t    note_param;
 
-        raw.raw[0] = mod_row_buf[ch * 4u + 0u];
-        raw.raw[1] = mod_row_buf[ch * 4u + 1u];
-        raw.raw[2] = mod_row_buf[ch * 4u + 2u];
-        raw.raw[3] = mod_row_buf[ch * 4u + 3u];
+        note_sample = (uint8_t)((b0 & 0xF0u) | ((b2 >> 4) & 0x0Fu));
+        note_period = ((uint16_t)(b0 & 0x0Fu) << 8) | b1;
+        note_effect = b2 & 0x0Fu;
+        note_param  = b3;
 
-        mod_decode_note(&raw, &note);
-
-        cs->effect            = note.effect;
-        cs->param             = note.param;
+        cs->effect            = note_effect;
+        cs->param             = note_param;
         cs->triggered         = 0;
         cs->note_delay_ticks  = 0;
         cs->note_cut_tick     = 0;
 
         /* New sample number: latch volume (guard invalid sample numbers) */
-        if (note.sample > MOD_MAX_SAMPLES) {
-            note.sample = 0u;
+        if (note_sample > MOD_MAX_SAMPLES) {
+            note_sample = 0u;
         }
-        if (note.sample != 0u) {
-            cs->sample_num = note.sample;
-            cs->volume     = mod.samples[note.sample].volume;
+        if (note_sample != 0u) {
+            cs->sample_num = note_sample;
+            cs->volume     = mod.samples[note_sample].volume;
             cs->hw_vol     = scale_volume(cs->volume);
         }
 
@@ -151,43 +156,43 @@ static void process_row(void)
         }
 
         /* New period (unless portamento) */
-        if (note.period != 0 && note.effect != FX_TONE_PORTAMENTO) {
+        if (note_period != 0 && note_effect != FX_TONE_PORTAMENTO) {
             int8_t ft = (cs->sample_num > 0) ?
                         mod.samples[cs->sample_num].finetune : 0;
-            cs->period = apply_finetune(note.period, ft);
+            cs->period = apply_finetune(note_period, ft);
         }
-        if (note.period != 0 && note.effect == FX_TONE_PORTAMENTO) {
+        if (note_period != 0 && note_effect == FX_TONE_PORTAMENTO) {
             int8_t ft = (cs->sample_num > 0) ?
                         mod.samples[cs->sample_num].finetune : 0;
-            cs->target_period = apply_finetune(note.period, ft);
+            cs->target_period = apply_finetune(note_period, ft);
         }
 
         /* Row-0 effects */
-        switch (note.effect) {
+        switch (note_effect) {
             case FX_SET_VOLUME:
-                cs->volume = (note.param > 64u) ? 64u : note.param;
+                cs->volume = (note_param > 64u) ? 64u : note_param;
                 cs->hw_vol = scale_volume(cs->volume);
                 break;
             case FX_SET_SPEED:
-                if (note.param == 0u) break;
-                if (note.param < 32u) mod.speed = note.param;
-                else                  mod.bpm   = note.param;
+                if (note_param == 0u) break;
+                if (note_param < 32u) mod.speed = note_param;
+                else                  mod.bpm   = note_param;
                 break;
             case FX_VIBRATO:
-                if (note.param & 0xF0u) cs->vib_speed = (note.param >> 4) & 0x0Fu;
-                if (note.param & 0x0Fu) cs->vib_depth =  note.param       & 0x0Fu;
+                if (note_param & 0xF0u) cs->vib_speed = (note_param >> 4) & 0x0Fu;
+                if (note_param & 0x0Fu) cs->vib_depth =  note_param       & 0x0Fu;
                 break;
             case FX_TONE_PORTAMENTO:
-                if (note.param != 0u) cs->port_speed = note.param;
+                if (note_param != 0u) cs->port_speed = note_param;
                 break;
             case FX_PATTERN_BREAK:
                 mod.pattern_break = 1;
-                mod.break_row = (uint8_t)(((note.param >> 4) * 10u) + (note.param & 0x0Fu));
+                mod.break_row = (uint8_t)(((note_param >> 4) * 10u) + (note_param & 0x0Fu));
                 if (mod.break_row >= MOD_ROWS_PER_PAT) mod.break_row = 0;
                 break;
             case FX_EXTENDED: {
-                uint8_t sub  = (note.param >> 4) & 0x0Fu;
-                uint8_t subp =  note.param       & 0x0Fu;
+                uint8_t sub  = (note_param >> 4) & 0x0Fu;
+                uint8_t subp =  note_param       & 0x0Fu;
                 switch (sub) {
                     case EFX_FINE_VOL_UP:
                         cs->volume += subp;
@@ -239,15 +244,15 @@ static void process_row(void)
         }
 
         /* MOD periods are normally in ~113..856 range; ignore junk */
-        if (note.period != 0u && (note.period < 28u || note.period > 4095u)) {
-            note.period = 0u;
+        if (note_period != 0u && (note_period < 28u || note_period > 4095u)) {
+            note_period = 0u;
         }
 
         /* Trigger sample if we have a new note (period != 0) */
-        if (note.period != 0u && note.effect != FX_TONE_PORTAMENTO) {
+        if (note_period != 0u && note_effect != FX_TONE_PORTAMENTO) {
             trigger_sample(hw, cs);
             cs->triggered = 1;
-        } else if (note.sample != 0u && cs->period != 0u && !cs->active) {
+        } else if (note_sample != 0u && cs->period != 0u && !cs->active) {
             /* Sample number given without period on a previously silent channel */
             trigger_sample(hw, cs);
             cs->triggered = 1;
