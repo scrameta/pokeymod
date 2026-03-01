@@ -31,7 +31,7 @@
 #include "adpcm.h"
 
 #define PAT_BYTES   (MOD_ROWS_PER_PAT * MOD_CHANNELS * 4)   /* 1024 */
-#define PATTERN_RAM_CACHE_THRESHOLD_BYTES (6u * 1024u)
+#define PATTERN_RAM_CACHE_THRESHOLD_BYTES (16u * 1024u)
 
 static uint8_t pat_buf_a[PAT_BYTES];
 static uint8_t pat_buf_b[PAT_BYTES];
@@ -493,6 +493,10 @@ uint8_t mod_load(const char *filename)
             }
         }
     }
+    if (s_fetch_pattern==ram_fetch_pattern)
+        printf("Using RAM for patterns\n");
+    else
+        printf("Streaming patterns\n");
 
     use_adpcm_global = (total_sample_bytes > (uint32_t)POKEYMAX_RAM_SIZE) ? 1u : 0u;
 
