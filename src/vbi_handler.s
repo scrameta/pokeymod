@@ -17,6 +17,7 @@
         .export _vbi_remove
         .import _mod_vbi_tick
         .import _pokeymax_loop_irq_fast
+        .importzp sp
 
 ; OS equates
 VVBLKD      = $0224     ; deferred VBI vector (lo/hi)
@@ -45,6 +46,13 @@ old_vbi_hi:   .res 1
 old_irq_lo:   .res 1
 old_irq_hi:   .res 1
 zp_save_vbi:  .res ZP_SAVE_LEN   ; VBI zero page save area
+saved_sp:     .res 2
+
+; Dedicated C stack while running the deferred VBI C tick.
+; This prevents re-entrant use of the foreground's cc65 software stack,
+; which otherwise causes memory corruption when NMI interrupts C code.
+VBI_CSTACK_SIZE = 160
+vbi_cstack:    .res VBI_CSTACK_SIZE
 
 .code
 
@@ -133,8 +141,26 @@ zp_save_vbi:  .res ZP_SAVE_LEN   ; VBI zero page save area
         ; cc65 runtime/C stack is not reentrant.
         sei
 
+        ; Switch cc65 software stack to a private VBI stack before calling C.
+        ; Even though we restore zero-page state, sharing the same software
+        ; stack with interrupted foreground C code can overwrite active frames.
+        lda sp
+        sta saved_sp
+        lda sp+1
+        sta saved_sp+1
+        lda #<(vbi_cstack + VBI_CSTACK_SIZE)
+        sta sp
+        lda #>(vbi_cstack + VBI_CSTACK_SIZE)
+        sta sp+1
+
         ; Call C tick function
         jsr _mod_vbi_tick
+
+        ; Restore foreground cc65 software stack.
+        lda saved_sp
+        sta sp
+        lda saved_sp+1
+        sta sp+1
 
         cli
 
