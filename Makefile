@@ -18,7 +18,7 @@ ASFLAGS = -t $(TARGET)
 SHARED_C = src/pokeymax_hw.c src/adpcm.c src/tables.c
 
 # --- Main player ---
-PLAYER_C = src/main.c src/app_loader.c src/app_player.c src/modplayer.c src/mod_loader.c \
+PLAYER_C = src/main.c src/app_loader.c src/app_player.c src/app_player_core.c src/modplayer.c src/mod_loader.c \
            src/loop_handler.c $(SHARED_C)
 PLAYER_S = src/vbi_handler.s src/loop_handler_irq.s
 PLAYER_O = $(PLAYER_C:.c=.o) $(PLAYER_S:.s=.o)

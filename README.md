@@ -211,7 +211,8 @@ include/
 src/
   main.c           Default entry: loader stage then player stage
   app_loader.c     Loader stage (hardware detect + MOD load + summaries)
-  app_player.c     Player stage (VBI install, playback loop, controls)
+  app_player_core.c Core embedding hooks (VBI/IRQ/main service, start/stop)
+  app_player.c      Optional full interactive loop wrapper (status/keys/VBI install)
   modplayer.c      MOD player tick engine, effects
   mod_loader.c     MOD file parser + sample uploader
   pokeymax_hw.c    PokeyMAX hardware driver

@@ -53,7 +53,8 @@ void app_player_stop(uint8_t close_file);
 
 /*
  * app_player_run()
- * Starts playback loop (installs VBI hook, handles keys, prefetches patterns).
+ * Optional full interactive wrapper: installs default VBI/IRQ hooks,
+ * polls keyboard, prints status, and runs until stopped.
  */
 void app_player_run(void);
 
