@@ -117,17 +117,18 @@ static void process_row(void)
     mod.pattern_break = 0;
     mod.do_jump       = 0;
 
-    for (ch = 0; ch < MOD_CHANNELS; ch++) {
+    for (ch = 0; ch < MOD_CHANNELS; ch++, row_data += 4u) {
         ChanState *cs = &mod.chan[ch];
         uint8_t    hw = (uint8_t)(ch + 1u);
-        uint8_t    b0 = row_data[ch * 4u + 0u];
-        uint8_t    b1 = row_data[ch * 4u + 1u];
-        uint8_t    b2 = row_data[ch * 4u + 2u];
-        uint8_t    b3 = row_data[ch * 4u + 3u];
+        uint8_t    b0 = row_data[0];
+        uint8_t    b1 = row_data[1];
+        uint8_t    b2 = row_data[2];
+        uint8_t    b3 = row_data[3];
         uint8_t    note_sample;
         uint16_t   note_period;
         uint8_t    note_effect;
         uint8_t    note_param;
+        uint8_t    hw_update_needed = 0;
 
         note_sample = (uint8_t)((b0 & 0xF0u) | ((b2 >> 4) & 0x0Fu));
         note_period = ((uint16_t)(b0 & 0x0Fu) << 8) | b1;
@@ -148,6 +149,7 @@ static void process_row(void)
             cs->sample_num = note_sample;
             cs->volume     = mod.samples[note_sample].volume;
             cs->hw_vol     = scale_volume(cs->volume);
+            hw_update_needed = 1;
         }
 
         /* Defensive: invalid latched sample from corrupt pattern data */
@@ -160,6 +162,7 @@ static void process_row(void)
             int8_t ft = (cs->sample_num > 0) ?
                         mod.samples[cs->sample_num].finetune : 0;
             cs->period = apply_finetune(note_period, ft);
+            hw_update_needed = 1;
         }
         if (note_period != 0 && note_effect == FX_TONE_PORTAMENTO) {
             int8_t ft = (cs->sample_num > 0) ?
@@ -172,6 +175,7 @@ static void process_row(void)
             case FX_SET_VOLUME:
                 cs->volume = (note_param > 64u) ? 64u : note_param;
                 cs->hw_vol = scale_volume(cs->volume);
+                hw_update_needed = 1;
                 break;
             case FX_SET_SPEED:
                 if (note_param == 0u) break;
@@ -198,17 +202,21 @@ static void process_row(void)
                         cs->volume += subp;
                         if (cs->volume > 64u) cs->volume = 64u;
                         cs->hw_vol = scale_volume(cs->volume);
+                        hw_update_needed = 1;
                         break;
                     case EFX_FINE_VOL_DOWN:
                         if (subp > cs->volume) cs->volume = 0;
                         else cs->volume -= subp;
                         cs->hw_vol = scale_volume(cs->volume);
+                        hw_update_needed = 1;
                         break;
                     case EFX_FINE_SLIDE_UP:
                         if (cs->period > subp) cs->period -= subp;
+                        hw_update_needed = 1;
                         break;
                     case EFX_FINE_SLIDE_DOWN:
                         cs->period += subp;
+                        hw_update_needed = 1;
                         break;
                     case EFX_LOOP:
                         if (subp == 0u) {
@@ -259,7 +267,7 @@ static void process_row(void)
         }
 
         /* If no trigger happened, push any volume change to hardware */
-        if (!cs->triggered && cs->active) {
+        if (!cs->triggered && cs->active && hw_update_needed) {
             pokeymax_channel_set_period_vol(hw, cs->period, cs->hw_vol);
         }
 
