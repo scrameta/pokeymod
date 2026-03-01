@@ -74,20 +74,10 @@ static uint8_t pokeymax_detect(void)
     POKE(REG_CFGUNLOCK, 0x00);
 
     pokeys = cap & CAP_POKEY_MASK;
-    if      (pokeys == 0u) printf("  Mono POKEY\n");
-    else if (pokeys == 1u) printf("  Stereo POKEY\n");
-    else                   printf("  Quad POKEY\n");
-
-    if (cap & CAP_SID)   printf("  SID\n");
-    if (cap & CAP_PSG)   printf("  PSG\n");
-    if (cap & CAP_COVOX) printf("  COVOX\n");
-    if (cap & CAP_FLASH) printf("  Flash\n");
 
     if (!(cap & CAP_SAMPLE)) {
-        printf("  No sample player\n");
         return 1;
     }
-    printf("  Sample player\n");
     return 2;
 }
 
@@ -114,7 +104,7 @@ static void display_load_summary(void)
 
     printf("Samples:  %u loaded (%u ADPCM, %u looped)\n",
            (unsigned)loaded, (unsigned)adpcm, (unsigned)looped);
-    printf("Audio:    %lu bytes raw -> %lu bytes PokeyMAX\n",
+    printf("Audio:    %lu bytes raw -> %lu bytes\n",
            (unsigned long)raw_bytes, (unsigned long)hw_bytes);
 }
 
@@ -148,10 +138,9 @@ int main(int argc, char *argv[])
     printf("PokeyMAX MOD Player\n");
     printf("-------------------\n");
 
-    printf("Detecting PokeyMAX...\n");
     det = pokeymax_detect();
-    if (det == 0u) { printf("Not found.\n"); return 1; }
-    if (det == 1u) { printf("No sample player.\n"); return 1; }
+    if (det == 0u) { printf("Requires PokeyMAX.\n"); return 1; }
+    if (det == 1u) { printf("PokeyMax has no sample player.\n"); return 1; }
 
     printf("Loading: %s\n", filename);
     if (mod_load(filename) != 0u) { printf("Load failed.\n"); return 1; }
