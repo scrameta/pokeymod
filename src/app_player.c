@@ -31,7 +31,7 @@ static void wait_vbi(void)
 static void display_status(void)
 {
     gotoxy(0,22);
-    printf("Ord:%3d/%3d Row:%2d BPM:%3d Spd:%d  \r",
+    printf("Ord:%3d/%3d Row:%2d BPM:%3d Spd:%d  ",
            (int)(mod_get_order() + 1),
            (int)mod.song_length,
            (int)mod_get_row(),
