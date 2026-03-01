@@ -166,7 +166,7 @@ static void load_progress_update(LoadProgressUI *ui,
     }
 
     if (stored_loaded != ui->stored_loaded) {
-        gotoxy(4, ui->base_row + 5u);
+        gotoxy(4, ui->base_row + 4u);
         printf("%8lu", (unsigned long)stored_loaded);
         ui->stored_loaded = stored_loaded;
     }
