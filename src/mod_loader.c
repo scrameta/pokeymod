@@ -63,6 +63,13 @@ typedef struct {
     char     sample_name[23];
 } LoadProgressUI;
 
+static uint8_t pct_u8(uint32_t part, uint32_t total)
+{
+    if (total == 0u) return 100u;
+    if (part >= total) return 100u;
+    return (uint8_t)((part * 100u) / total);
+}
+
 static void load_progress_begin(LoadProgressUI *ui, uint16_t source_total)
 {
     ui->base_row      = wherey();
@@ -77,10 +84,12 @@ static void load_progress_begin(LoadProgressUI *ui, uint16_t source_total)
     ui->sample_name[0]= 0;
 
     printf("Sample load progress\n");
-    printf("Sample:  0/0   Name: %-22.22s\n", "");
-    printf("Format: %-5s  Length: %5u  Status: %-7s\n", "", 0u, "");
-    printf("Source: %9lu / %9lu bytes\n", 0UL, (unsigned long)source_total);
-    printf("Stored: %9lu bytes\n", 0UL);
+    printf("Load 00/00   0%%\n");
+    printf("Name: %-22.22s\n", "");
+    printf("Fmt:----- Len:00000 St:-------\n");
+    printf("Src:%8lu/%8lu\n", 0UL, (unsigned long)source_total);
+    printf("Dst:00000000\n");
+    ui->source_total = source_total;
     fflush(stdout);
 }
 
@@ -96,54 +105,60 @@ static void load_progress_update(LoadProgressUI *ui,
     const char *name = si->name[0] ? si->name : "(unnamed)";
     const char *fmt  = si->is_adpcm ? "ADPCM" : "PCM";
     const char *st   = skipped ? "SKIPPED" : "OK";
+    uint8_t pct      = pct_u8(source_loaded, source_total);
 
     if (sample_index != ui->sample_index || total_samples != ui->total_samples) {
-        gotoxy(8, ui->base_row + 1u);
+        gotoxy(5, ui->base_row + 1u);
         printf("%2u/%2u", (unsigned)sample_index, (unsigned)total_samples);
         ui->sample_index  = sample_index;
         ui->total_samples = total_samples;
     }
 
+    if (source_loaded != ui->source_loaded || source_total != ui->source_total) {
+        gotoxy(11, ui->base_row + 1u);
+        printf("%3u%%", (unsigned)pct);
+    }
+
     if (strncmp(name, ui->sample_name, 22u) != 0) {
-        gotoxy(20, ui->base_row + 1u);
+        gotoxy(6, ui->base_row + 2u);
         printf("%-22.22s", name);
         strncpy(ui->sample_name, name, 22u);
         ui->sample_name[22] = 0;
     }
 
     if (si->is_adpcm != ui->is_adpcm) {
-        gotoxy(8, ui->base_row + 2u);
+        gotoxy(4, ui->base_row + 3u);
         printf("%-5s", fmt);
         ui->is_adpcm = si->is_adpcm;
     }
 
     if (si->length != ui->sample_len) {
-        gotoxy(23, ui->base_row + 2u);
+        gotoxy(14, ui->base_row + 3u);
         printf("%5u", (unsigned)si->length);
         ui->sample_len = si->length;
     }
 
     if (skipped != ui->skipped) {
-        gotoxy(38, ui->base_row + 2u);
+        gotoxy(23, ui->base_row + 3u);
         printf("%-7s", st);
         ui->skipped = skipped;
     }
 
     if (source_loaded != ui->source_loaded) {
-        gotoxy(8, ui->base_row + 3u);
-        printf("%9lu", (unsigned long)source_loaded);
+        gotoxy(4, ui->base_row + 4u);
+        printf("%8lu", (unsigned long)source_loaded);
         ui->source_loaded = source_loaded;
     }
 
     if (source_total != ui->source_total) {
-        gotoxy(20, ui->base_row + 3u);
-        printf("%9lu", (unsigned long)source_total);
+        gotoxy(13, ui->base_row + 4u);
+        printf("%8lu", (unsigned long)source_total);
         ui->source_total = source_total;
     }
 
     if (stored_loaded != ui->stored_loaded) {
-        gotoxy(8, ui->base_row + 4u);
-        printf("%9lu", (unsigned long)stored_loaded);
+        gotoxy(4, ui->base_row + 5u);
+        printf("%8lu", (unsigned long)stored_loaded);
         ui->stored_loaded = stored_loaded;
     }
 
