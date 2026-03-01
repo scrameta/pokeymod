@@ -459,6 +459,7 @@ int main(int argc, char **argv) {
         mock_render_audio_for_one_vbi();
 
         /* VBI tick (player logic) */
+        pokeymax_mock_poke(RTCLOK,pokeymax_mock_peek(RTCLOK)+1);
         mod_vbi_tick();
 
         /* Main loop prefetch polling */
