@@ -40,7 +40,7 @@ TEST56_S = src/vbi_handler.s
 TEST56_COMPAT_S = src/loop_handler_irq_compat.s
 
 all: modplay.xex test2.xex test3.xex test3ad.xex test4.xex test5.xex test6.xex test7.xex test8.xex test9.xex test9b.xex test10.xex test11.xex
-.PHONY: all player test2 test3 test3-adpcm test4 test5 test6 test7 test8 test9 test9b test10 test11 test-adpcm-linux clean
+.PHONY: all player test2 test3 test3-adpcm test4 test5 test6 test7 test8 test9 test9b test10 test11 test-adpcm-linux test-streaming-linux clean
 
 player: modplay.xex
 
@@ -93,6 +93,10 @@ test11.xex: $(TEST11_C) $(TEST56_S) src/loop_handler_irq.s
 test-adpcm-linux: tests/adpcm_roundtrip_linux.c src/adpcm.c include/adpcm.h
 	gcc -std=c99 -O2 -Wall -Wextra -Iinclude -o tests/adpcm_roundtrip_linux tests/adpcm_roundtrip_linux.c src/adpcm.c -lm
 	./tests/adpcm_roundtrip_linux
+
+test-streaming-linux: tests/test12_streaming_pattern_integrity_linux.c src/mod_loader.c src/modplayer.c src/pokeymax_hw.c src/adpcm.c src/tables.c src/loop_handler.c
+	gcc -std=c99 -O2 -Wall -Wextra -Itests/linuxshim -Iinclude -o tests/test12_streaming_pattern_integrity_linux tests/test12_streaming_pattern_integrity_linux.c src/mod_loader.c src/modplayer.c src/pokeymax_hw.c src/adpcm.c src/tables.c src/loop_handler.c
+	./tests/test12_streaming_pattern_integrity_linux mods/agend.mod
 
 clean:
 	rm -f *.xex modplay.map 

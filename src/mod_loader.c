@@ -57,6 +57,7 @@ static PatternFetchFn s_fetch_pattern = disk_fetch_pattern;
 /* Chunked prefetch state (256-byte slices to shorten SIO stalls) */
 static uint8_t  prefetch_seek_done = 0;
 static uint16_t prefetch_bytes_done = 0;
+static uint8_t  prefetch_pattern_num = 0xFF;
 
 #define SECTOR_SIZE 256
 static uint8_t sector_buf[SECTOR_SIZE];
@@ -262,6 +263,7 @@ void mod_set_pattern_fetch_fn(uint8_t (*fetch_fn)(uint8_t pattern_num, uint8_t *
     s_fetch_pattern = fetch_fn ? fetch_fn : disk_fetch_pattern;
     prefetch_seek_done = 0;
     prefetch_bytes_done = 0;
+    prefetch_pattern_num = 0xFF;
 }
 
 void mod_set_load_progress_plugin(const ModLoadProgressPlugin *plugin)
@@ -322,6 +324,16 @@ void mod_pattern_advance(uint8_t new_current, uint8_t prefetch_next)
     }
 
     if (prefetch_next != 0xFF && prefetch_next != pat_current_num) {
+        /*
+         * New prefetch target invalidates any partial chunk state.
+         * Without this, a partially streamed old pattern can be mixed with
+         * bytes from the new target if requests change mid-stream.
+         */
+        if (prefetch_next != pat_next_num) {
+            prefetch_seek_done = 0;
+            prefetch_bytes_done = 0;
+            prefetch_pattern_num = 0xFF;
+        }
         pat_next_num      = prefetch_next;
         mod_need_prefetch = 1;
     }
@@ -334,11 +346,17 @@ static uint8_t disk_fetch_pattern(uint8_t pattern_num, uint8_t *dst)
 
     if (!mod_file) return 1;
 
+    if (prefetch_seek_done && pattern_num != prefetch_pattern_num) {
+        prefetch_seek_done = 0;
+        prefetch_bytes_done = 0;
+    }
+
     if (!prefetch_seek_done) {
         offset = pattern_data_offset + (uint32_t)pattern_num * (uint32_t)PAT_BYTES;
         if (fseek(mod_file, (long)offset, SEEK_SET) != 0) return 1;
         prefetch_seek_done = 1;
         prefetch_bytes_done = 0;
+        prefetch_pattern_num = pattern_num;
     }
 
     if (prefetch_bytes_done >= PAT_BYTES) return 0;
@@ -378,6 +396,7 @@ uint8_t mod_prefetch_next_pattern(void)
         mod_need_prefetch = 0;
         prefetch_seek_done = 0;
         prefetch_bytes_done = 0;
+        prefetch_pattern_num = 0xFF;
         return 0;
     }
 
@@ -386,6 +405,7 @@ uint8_t mod_prefetch_next_pattern(void)
         mod_need_prefetch = 0;
         prefetch_seek_done = 0;
         prefetch_bytes_done = 0;
+        prefetch_pattern_num = 0xFF;
         return 0;
     }
 
@@ -397,6 +417,7 @@ uint8_t mod_prefetch_next_pattern(void)
     /* error: reset partial state so a later retry restarts cleanly */
     prefetch_seek_done = 0;
     prefetch_bytes_done = 0;
+    prefetch_pattern_num = 0xFF;
     return 1;
 }
 
@@ -834,6 +855,7 @@ uint8_t mod_load(const char *filename)
         if (rc != 0u) return 1;
         prefetch_seek_done = 0;
         prefetch_bytes_done = 0;
+        prefetch_pattern_num = 0xFF;
         pat_current_num = mod.order_table[0];
     }
 
@@ -846,6 +868,7 @@ uint8_t mod_load(const char *filename)
         if (rc != 0u) return 1;
         prefetch_seek_done = 0;
         prefetch_bytes_done = 0;
+        prefetch_pattern_num = 0xFF;
         pat_next_num = mod.order_table[1];
     }
 
