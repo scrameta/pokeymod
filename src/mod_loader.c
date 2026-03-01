@@ -232,6 +232,23 @@ uint8_t mod_read_row(uint8_t pattern, uint8_t row)
     return 1;   /* not buffered - prefetch didn't complete in time */
 }
 
+uint8_t mod_get_row_ptr(uint8_t pattern, uint8_t row, const uint8_t **row_ptr)
+{
+    uint16_t offset = (uint16_t)row * (MOD_CHANNELS * 4u);
+
+    if (pattern == pat_current_num) {
+        *row_ptr = pat_current + offset;
+        return 0;
+    }
+    if (pattern == pat_next_num) {
+        *row_ptr = pat_next + offset;
+        return 0;
+    }
+
+    *row_ptr = 0;
+    return 1;
+}
+
 /* -------------------------------------------------------
  * mod_pattern_advance() - called from VBI when order advances
  * Flips buffers, requests next prefetch. NO disk I/O.
