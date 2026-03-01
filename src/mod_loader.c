@@ -59,8 +59,8 @@ static uint8_t adpcm_out[SECTOR_SIZE / 2];
 
 uint8_t mod_row_buf[MOD_CHANNELS * 4];
 
-#if defined(__CC65__)
 typedef struct {
+#if defined(__CC65__)
     uint8_t  base_row;
     uint16_t sample_index;
     uint16_t total_samples;
@@ -71,17 +71,22 @@ typedef struct {
     uint8_t  is_adpcm;
     uint8_t  skipped;
     char     sample_name[23];
+#endif
 } LoadProgressUI;
 
+#if defined(__CC65__)
 static uint8_t pct_u8(uint32_t part, uint32_t total)
 {
     if (total == 0u) return 100u;
     if (part >= total) return 100u;
     return (uint8_t)((part * 100u) / total);
 }
+#endif
 
-static void load_progress_begin(LoadProgressUI *ui, uint16_t source_total)
+static void load_progress_begin_default(void *ctx, uint32_t source_total)
 {
+    LoadProgressUI *ui = (LoadProgressUI*)ctx;
+#if defined(__CC65__)
     ui->base_row      = wherey();
     ui->sample_index  = 0xFFFFu;
     ui->total_samples = 0xFFFFu;
@@ -100,17 +105,31 @@ static void load_progress_begin(LoadProgressUI *ui, uint16_t source_total)
     printf("Dst:00000000\n");
     ui->source_total = source_total;
     fflush(stdout);
+#else
+    (void)ui;
+    printf("\r[ 0/ 0] %-22.22s  %-5s  len:%5u  src:%9lu/%9lu  dst:%9lu  %-7s   ",
+           "",
+           "",
+           0u,
+           0UL,
+           (unsigned long)source_total,
+           0UL,
+           "");
+    fflush(stdout);
+#endif
 }
 
-static void load_progress_update(LoadProgressUI *ui,
-                                 const SampleInfo *si,
-                                 uint16_t sample_index,
-                                 uint16_t total_samples,
-                                 uint32_t source_loaded,
-                                 uint32_t source_total,
-                                 uint32_t stored_loaded,
-                                 uint8_t skipped)
+static void load_progress_update_default(void *ctx,
+                                         const SampleInfo *si,
+                                         uint16_t sample_index,
+                                         uint16_t total_samples,
+                                         uint32_t source_loaded,
+                                         uint32_t source_total,
+                                         uint32_t stored_loaded,
+                                         uint8_t skipped)
 {
+    LoadProgressUI *ui = (LoadProgressUI*)ctx;
+#if defined(__CC65__)
     const char *name = si->name[0] ? si->name : "(unnamed)";
     const char *fmt  = si->is_adpcm ? "ADPCM" : "PCM";
     const char *st   = skipped ? "SKIPPED" : "OK";
@@ -172,27 +191,8 @@ static void load_progress_update(LoadProgressUI *ui,
     }
 
     fflush(stdout);
-}
-
-static void load_progress_end(LoadProgressUI *ui)
-{
-    gotoxy(0, ui->base_row + 5u);
-    fflush(stdout);
-}
 #else
-static void load_progress_begin(uint32_t source_total)
-{
-    (void)source_total;
-}
-
-static void load_progress_update(const SampleInfo *si,
-                                 uint16_t sample_index,
-                                 uint16_t total_samples,
-                                 uint32_t source_loaded,
-                                 uint32_t source_total,
-                                 uint32_t stored_loaded,
-                                 uint8_t skipped)
-{
+    (void)ui;
     printf("\r[%2u/%2u] %-22.22s  %-5s  len:%5u  src:%9lu/%9lu  dst:%9lu  %-7s   ",
            (unsigned)sample_index,
            (unsigned)total_samples,
@@ -204,14 +204,30 @@ static void load_progress_update(const SampleInfo *si,
            (unsigned long)stored_loaded,
            skipped ? "SKIPPED" : "OK");
     fflush(stdout);
+#endif
 }
 
-static void load_progress_end(void)
+static void load_progress_end_default(void *ctx)
 {
+    LoadProgressUI *ui = (LoadProgressUI*)ctx;
+#if defined(__CC65__)
+    gotoxy(0, ui->base_row + 5u);
+#else
+    (void)ui;
     printf("\n");
+#endif
     fflush(stdout);
 }
-#endif
+
+static LoadProgressUI s_default_progress_ctx;
+const ModLoadProgressPlugin mod_default_load_progress_plugin = {
+    load_progress_begin_default,
+    load_progress_update_default,
+    load_progress_end_default,
+    &s_default_progress_ctx
+};
+
+static const ModLoadProgressPlugin *s_progress_plugin = &mod_default_load_progress_plugin;
 
 static uint16_t read_be16(const uint8_t *p)
 {
@@ -228,6 +244,11 @@ void mod_set_pattern_fetch_fn(uint8_t (*fetch_fn)(uint8_t pattern_num, uint8_t *
     s_fetch_pattern = fetch_fn ? fetch_fn : disk_fetch_pattern;
     prefetch_seek_done = 0;
     prefetch_bytes_done = 0;
+}
+
+void mod_set_load_progress_plugin(const ModLoadProgressPlugin *plugin)
+{
+    s_progress_plugin = plugin;
 }
 
 /* -------------------------------------------------------
@@ -367,9 +388,6 @@ uint8_t mod_load(const char *filename)
     uint8_t  had_status_output;
     uint8_t  use_adpcm_global;
     uint32_t sample_data_offset;
-#if defined(__CC65__)
-    LoadProgressUI progress_ui;
-#endif
 
     memset(&mod, 0, sizeof(mod));
     pat_current_num   = 0xFF;
@@ -449,11 +467,10 @@ uint8_t mod_load(const char *filename)
         if (si->length == 0u) continue;
 
         if (!progress_started) {
-#if defined(__CC65__)
-            load_progress_begin(&progress_ui, total_sample_bytes);
-#else
-            load_progress_begin(total_sample_bytes);
-#endif
+            if (s_progress_plugin && s_progress_plugin->begin) {
+                s_progress_plugin->begin(s_progress_plugin->ctx,
+                                         total_sample_bytes);
+            }
             progress_started = 1;
         }
 
@@ -472,24 +489,16 @@ uint8_t mod_load(const char *filename)
 
         ram_addr = pokeymax_alloc(ram_needed);
         if (ram_addr == POKEYMAX_ALLOC_FAIL) {
-#if defined(__CC65__)
-            load_progress_update(&progress_ui,
-                                 si,
-                                 (uint16_t)(loaded_samples + 1u),
-                                 total_samples_to_load,
-                                 loaded_source_bytes,
-                                 total_sample_bytes,
-                                 loaded_stored_bytes,
-                                 1u);
-#else
-            load_progress_update(si,
-                                 (uint16_t)(loaded_samples + 1u),
-                                 total_samples_to_load,
-                                 loaded_source_bytes,
-                                 total_sample_bytes,
-                                 loaded_stored_bytes,
-                                 1u);
-#endif
+            if (s_progress_plugin && s_progress_plugin->update) {
+                s_progress_plugin->update(s_progress_plugin->ctx,
+                                          si,
+                                          (uint16_t)(loaded_samples + 1u),
+                                          total_samples_to_load,
+                                          loaded_source_bytes,
+                                          total_sample_bytes,
+                                          loaded_stored_bytes,
+                                          1u);
+            }
             had_status_output = 1;
             fseek(mod_file, (long)si->length, SEEK_CUR);
             si->length = 0;
@@ -518,24 +527,16 @@ uint8_t mod_load(const char *filename)
             }
             remaining -= chunk;
 
-#if defined(__CC65__)
-            load_progress_update(&progress_ui,
-                                 si,
-                                 (uint16_t)(loaded_samples + 1u),
-                                 total_samples_to_load,
-                                 (uint32_t)(loaded_source_bytes + (si->length - remaining)),
-                                 total_sample_bytes,
-                                 (uint32_t)(loaded_stored_bytes + written),
-                                 0u);
-#else
-            load_progress_update(si,
-                                 (uint16_t)(loaded_samples + 1u),
-                                 total_samples_to_load,
-                                 (uint32_t)(loaded_source_bytes + (si->length - remaining)),
-                                 total_sample_bytes,
-                                 (uint32_t)(loaded_stored_bytes + written),
-                                 0u);
-#endif
+            if (s_progress_plugin && s_progress_plugin->update) {
+                s_progress_plugin->update(s_progress_plugin->ctx,
+                                          si,
+                                          (uint16_t)(loaded_samples + 1u),
+                                          total_samples_to_load,
+                                          (uint32_t)(loaded_source_bytes + (si->length - remaining)),
+                                          total_sample_bytes,
+                                          (uint32_t)(loaded_stored_bytes + written),
+                                          0u);
+            }
             had_status_output = 1;
         }
 
@@ -545,11 +546,9 @@ uint8_t mod_load(const char *filename)
     }
 
     if (had_status_output) {
-#if defined(__CC65__)
-        load_progress_end(&progress_ui);
-#else
-        load_progress_end();
-#endif
+        if (s_progress_plugin && s_progress_plugin->end) {
+            s_progress_plugin->end(s_progress_plugin->ctx);
+        }
     }
 
     /* Pre-load pattern for order 0 into current buffer (blocking via fetch backend) */
