@@ -27,8 +27,8 @@ XITVBV      = $E462     ; OS: exit deferred VBI
 SAM_IRQACT  = $D292     ; PokeyMAX sample end IRQ active/clear
 COLBK       = $D01A     ; GTIA background color
 
-BUSY_COLOR_VBI = $2A    ; light green pulse while VBI music tick runs
-BUSY_COLOR_IRQ = $46    ; purple pulse while sample IRQ loop handler runs
+BUSY_COLOR_VBI = $38    ; red green pulse while VBI music tick runs
+BUSY_COLOR_IRQ = $68    ; blue pulse while sample IRQ loop handler runs
 
 ; cc65 zero page on Atari target starts at $82.
 ; It uses 26 bytes ($1A): sp, sreg, regsave, ptr1-4, tmp1-4, regbank
@@ -46,8 +46,6 @@ old_irq_lo:   .res 1
 old_irq_hi:   .res 1
 zp_save_vbi:  .res ZP_SAVE_LEN   ; VBI zero page save area
 zp_save_irq:  .res ZP_SAVE_LEN   ; IRQ zero page save area (must be separate: IRQ can interrupt VBI)
-bg_saved_vbi: .res 1
-bg_saved_irq: .res 1
 
 .code
 
@@ -114,8 +112,6 @@ bg_saved_irq: .res 1
 ;--------------------------------------------------------------
 .proc our_vbi
         ; Mark CPU busy in visible way: pulse background color while tick runs.
-        lda COLBK
-        sta bg_saved_vbi
         lda #BUSY_COLOR_VBI
         sta COLBK
 
@@ -143,7 +139,7 @@ bg_saved_irq: .res 1
 
         cli
 
-        lda bg_saved_vbi
+        lda #0
         sta COLBK
 
         ; Restore cc65 zero page temporaries
@@ -179,8 +175,6 @@ bg_saved_irq: .res 1
         beq @chain              ; nothing from PokeyMAX, skip
 
         ; Mark CPU busy while loop IRQ work is executing.
-        lda COLBK
-        sta bg_saved_irq
         lda #BUSY_COLOR_IRQ
         sta COLBK
 
@@ -198,7 +192,7 @@ bg_saved_irq: .res 1
 
         jsr _pokeymax_loop_handler
 
-        lda bg_saved_irq
+        lda #0
         sta COLBK
 
         ; loop_handler clears IRQACT internally
