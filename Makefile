@@ -11,7 +11,7 @@
 #   make clean       - remove all build artefacts
 
 TARGET  = atari
-CFLAGS  = -t $(TARGET) -O --include-dir include
+CFLAGS  = -t $(TARGET) -Osir -Cl --include-dir include
 ASFLAGS = -t $(TARGET)
 
 # --- Shared sources (used by player and tests) ---
