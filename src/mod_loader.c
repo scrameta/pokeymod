@@ -47,6 +47,13 @@ static uint32_t pattern_data_offset = 0;
 static uint8_t sector_buf[SECTOR_SIZE];
 static uint8_t adpcm_out[SECTOR_SIZE / 2];
 
+/* Pattern streaming is intentionally 128 bytes (1 Atari disk sector) per call
+ * so foreground audio remains smooth during playback. */
+#define PAT_STREAM_SECTOR 128u
+
+static uint16_t pat_stream_pos = 0;
+static uint8_t  pat_stream_active = 0;
+
 uint8_t mod_row_buf[MOD_CHANNELS * 4];
 
 #if defined(__CC65__)
@@ -279,18 +286,34 @@ void mod_pattern_advance(uint8_t new_current, uint8_t prefetch_next)
 uint8_t mod_prefetch_next_pattern(void)
 {
     uint32_t offset;
+    uint16_t chunk;
 
     if (!mod_need_prefetch)   return 0;
     if (!mod_file)            return 1;
     if (pat_next_num == 0xFF) { mod_need_prefetch = 0; return 0; }
 
-    offset = pattern_data_offset
-           + (uint32_t)pat_next_num * (uint32_t)PAT_BYTES;
+    if (!pat_stream_active) {
+        offset = pattern_data_offset
+               + (uint32_t)pat_next_num * (uint32_t)PAT_BYTES;
+        if (fseek(mod_file, (long)offset, SEEK_SET) != 0) return 1;
+        pat_stream_pos    = 0;
+        pat_stream_active = 1;
+    }
 
-    if (fseek(mod_file, (long)offset, SEEK_SET) != 0) return 1;
-    if (fread(pat_next, 1, PAT_BYTES, mod_file) != PAT_BYTES) return 1;
+    chunk = (uint16_t)(PAT_BYTES - pat_stream_pos);
+    if (chunk > PAT_STREAM_SECTOR) chunk = PAT_STREAM_SECTOR;
 
-    mod_need_prefetch = 0;
+    if (fread(pat_next + pat_stream_pos, 1, chunk, mod_file) != chunk) {
+        pat_stream_active = 0;
+        return 1;
+    }
+    pat_stream_pos += chunk;
+
+    if (pat_stream_pos >= PAT_BYTES) {
+        mod_need_prefetch = 0;
+        pat_stream_active = 0;
+    }
+
     return 0;
 }
 
@@ -321,6 +344,8 @@ uint8_t mod_load(const char *filename)
     pat_current_num   = 0xFF;
     pat_next_num      = 0xFF;
     mod_need_prefetch = 0;
+    pat_stream_active = 0;
+    pat_stream_pos    = 0;
 
     if (mod_file) { fclose(mod_file); mod_file = NULL; }
     mod_file = fopen(filename, "rb");

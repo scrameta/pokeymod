@@ -33,6 +33,27 @@ extern void vbi_remove(void);
 #define MOD_KEY_NONE  255
 #define MOD_KEY_SPACE  32
 
+/* OS sound effects control (includes SIO beeps/clicks while loading). */
+#define OS_SOUNDR      0x0041
+
+static uint8_t os_soundr_saved = 0;
+static uint8_t os_soundr_muted = 0;
+
+static void sio_audio_disable(void)
+{
+    if (os_soundr_muted) return;
+    os_soundr_saved = PEEK(OS_SOUNDR);
+    POKE(OS_SOUNDR, 0u);
+    os_soundr_muted = 1u;
+}
+
+static void sio_audio_restore(void)
+{
+    if (!os_soundr_muted) return;
+    POKE(OS_SOUNDR, os_soundr_saved);
+    os_soundr_muted = 0u;
+}
+
 static uint8_t key_read_clear(void)
 {
     uint8_t k;
@@ -152,6 +173,7 @@ int main(int argc, char *argv[])
     if (det == 1u) { printf("No sample player.\n"); return 1; }
 
     printf("Loading: %s\n", filename);
+    sio_audio_disable();
     if (mod_load(filename) != 0u) { printf("Load failed.\n"); return 1; }
 
     printf("Orders:   %d\n", (int)mod.song_length);
@@ -194,6 +216,7 @@ int main(int argc, char *argv[])
     mod_stop();
     vbi_remove();
     mod_file_close();
+    sio_audio_restore();
 
     printf("\nStopped.\n");
     return 0;
