@@ -196,6 +196,7 @@ so sample data size is limited only by the 42KB PokeyMAX block RAM.
 
 For very large MODs (>42KB samples), ADPCM compression is applied automatically,
 giving effective capacity of ~84KB of original 8-bit sample data.
+For more than that we start to downsample.
 
 For pattern data <= 16KB we store them in RAM - if there is space. 
 For pattern data > 16KB its stream from storage, which currently causes small glitches.

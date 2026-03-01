@@ -88,6 +88,15 @@ static void trigger_sample(uint8_t hw_chan, ChanState *cs)
 
     hw_period = cs->period;
 
+    /* Downsampled samples play at 1/N the original rate.
+     * Multiply the period by N to restore the correct pitch
+     * (longer period = lower playback frequency = matches half/quarter rate data). */
+    if (si->downsample_factor > 1u) {
+        uint32_t adj = (uint32_t)hw_period * (uint32_t)si->downsample_factor;
+        /* Clamp to uint16_t max - if period overflows the hardware can't play it */
+        hw_period = (adj > 0xFFFFUL) ? 0xFFFFu : (uint16_t)adj;
+    }
+
     cs->sam_addr   = si->pokeymax_addr;
     cs->sam_len    = si->length;
     cs->loop_start = si->loop_start;
