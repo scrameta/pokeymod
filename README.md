@@ -169,6 +169,12 @@ Copy `modplay.xex` to your Atari (via SIO2PC, AtariMax, etc.) or include in an A
 modplay.xex myfile.mod
 ```
 
+...or better (for more RAM):
+```
+X modplay.xex myfile.mod
+```
+
+
 **Default (if no argument given):**
 Loads `D1:MOD.DAT` from drive 1.
 
