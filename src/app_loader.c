@@ -22,28 +22,6 @@ static uint8_t pokeymax_detect(void)
     return 2;
 }
 
-static void display_load_summary(void)
-{
-    uint8_t i;
-    uint8_t loaded = 0, adpcm = 0, looped = 0;
-    uint32_t raw_bytes = 0, hw_bytes = 0;
-
-    for (i = 1; i <= MOD_MAX_SAMPLES; i++) {
-        const SampleInfo *si = &mod.samples[i];
-        if (si->length == 0u) continue;
-        loaded++;
-        if (si->is_adpcm) adpcm++;
-        if (si->has_loop) looped++;
-        raw_bytes += si->length;
-        hw_bytes  += si->pokeymax_len;
-    }
-
-    printf("Samples:  %u loaded (%u ADPCM, %u looped)\n",
-           (unsigned)loaded, (unsigned)adpcm, (unsigned)looped);
-    printf("Audio:    %lu bytes raw -> %lu bytes\n",
-           (unsigned long)raw_bytes, (unsigned long)hw_bytes);
-}
-
 uint8_t app_loader_run(const char *filename, uint8_t show_progress_ui)
 {
     uint8_t det;
@@ -72,7 +50,6 @@ uint8_t app_loader_run(const char *filename, uint8_t show_progress_ui)
     printf("RAM used: %u / %u\n",
            (unsigned)pokeymax_ram_ptr,
            (unsigned)POKEYMAX_RAM_SIZE);
-    display_load_summary();
     printf("\nSPACE=pause  any key=stop\n\n");
 
     return 0;
