@@ -145,8 +145,8 @@ int8_t adpcm_decode_nibble(uint8_t nibble, ADPCMState *state)
     if (nibble & 8u) pred -= diff;
     else             pred += diff;
 
-    if (pred > 32767) pred = 32767;
-    if (pred < -32768) pred = -32768;
+    if (pred > 32767l) pred = 32767l;
+    if (pred < -32768l) pred = -32768l;
     state->predictor = (int16_t)pred;
 
     idx = (int8_t)state->step_index + ima_index_table[nibble & 0x0Fu];
