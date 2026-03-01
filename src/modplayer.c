@@ -374,8 +374,14 @@ static void update_effects(void)
 
 /* -------------------------------------------------------
  * BPM timing (8.8 fixed-point accumulator)
- * step = (VBI_HZ * 640) / BPM
- * PAL 50Hz, BPM 125 → step = 256 = exactly 1 tick per VBI
+ *
+ * MOD tick rate is BPM * 24 / 60 ticks per second.
+ * We convert to ticks-per-VBI in 8.8 fixed point:
+ *
+ *   step = 256 * (BPM * 24 / 60) / VBI_HZ
+ *        = (BPM * 256 * 24) / (60 * VBI_HZ)
+ *
+ * PAL 50Hz, BPM 125 -> step = 256 (exactly 1 tick per VBI).
  * ------------------------------------------------------- */
 static uint16_t bpm_accum = 0;
 static uint16_t bpm_step  = 0;
@@ -383,9 +389,15 @@ static uint16_t last_bpm  = 0;
 
 static void update_bpm_step(void)
 {
+    uint32_t numer;
+    uint16_t denom;
+
     if (mod.bpm == last_bpm) return;
     last_bpm  = mod.bpm;
-    bpm_step  = (uint16_t)(((uint32_t)VBI_HZ * 640UL) / (uint32_t)mod.bpm);
+
+    numer = (uint32_t)mod.bpm * 256UL * 24UL;
+    denom = (uint16_t)(60u * (uint16_t)VBI_HZ);
+    bpm_step = (uint16_t)((numer + (uint32_t)(denom / 2u)) / (uint32_t)denom);
     bpm_accum = 0;
 }
 
