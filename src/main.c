@@ -139,6 +139,8 @@ int main(int argc, char *argv[])
     uint8_t     paused;
     uint8_t     det;
 
+    (*(volatile unsigned char*)0x41) = 0; // disable beeps
+
     filename = (argc > 1) ? argv[1] : "D1:MOD.DAT";
     paused   = 0;
 
@@ -171,9 +173,14 @@ int main(int argc, char *argv[])
     while (mod.playing) {
         display_status();
 
-        /* Prefetch next pattern from disk if needed (MUST be in main loop, not VBI) */
+        /* Prefetch next pattern from disk if needed (MUST be in main loop, not VBI).
+         * Delay a few rows/ticks so any hiccup is less obvious at row 0.
+         * mod_prefetch_next_pattern() now progresses in 256-byte chunks. */
         if (mod_need_prefetch) {
-            mod_prefetch_next_pattern();
+            uint8_t row = mod_get_row();
+            if ((row >= 4u && mod.tick != 0u) || row >= 48u) {
+                mod_prefetch_next_pattern();
+            }
         }
 
         key = key_read_clear();

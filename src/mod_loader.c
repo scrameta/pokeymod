@@ -21,6 +21,7 @@
 #include <stdint.h>
 #if defined(__CC65__)
 #include <conio.h>
+#include <atari.h>
 #endif
 #include "mod_format.h"
 #include "modplayer.h"
@@ -42,6 +43,15 @@ uint8_t mod_need_prefetch = 0;   /* main loop polls this */
 
 static FILE    *mod_file            = NULL;
 static uint32_t pattern_data_offset = 0;
+
+/* Minimal pluggable fetch backend (Step A): default = disk fetch) */
+typedef uint8_t (*PatternFetchFn)(uint8_t pattern_num, uint8_t *dst);
+static uint8_t disk_fetch_pattern(uint8_t pattern_num, uint8_t *dst);
+static PatternFetchFn s_fetch_pattern = disk_fetch_pattern;
+
+/* Chunked prefetch state (256-byte slices to shorten SIO stalls) */
+static uint8_t  prefetch_seek_done = 0;
+static uint16_t prefetch_bytes_done = 0;
 
 #define SECTOR_SIZE 256
 static uint8_t sector_buf[SECTOR_SIZE];
@@ -214,6 +224,13 @@ void mod_file_close(void)
     if (mod_file) { fclose(mod_file); mod_file = NULL; }
 }
 
+void mod_set_pattern_fetch_fn(uint8_t (*fetch_fn)(uint8_t pattern_num, uint8_t *dst))
+{
+    s_fetch_pattern = fetch_fn ? fetch_fn : disk_fetch_pattern;
+    prefetch_seek_done = 0;
+    prefetch_bytes_done = 0;
+}
+
 /* -------------------------------------------------------
  * mod_read_row() - called from VBI, NO disk I/O
  * ------------------------------------------------------- */
@@ -272,26 +289,64 @@ void mod_pattern_advance(uint8_t new_current, uint8_t prefetch_next)
     }
 }
 
+static uint8_t disk_fetch_pattern(uint8_t pattern_num, uint8_t *dst)
+{
+    uint32_t offset;
+    uint16_t chunk;
+
+    if (!mod_file) return 1;
+
+    if (!prefetch_seek_done) {
+        offset = pattern_data_offset + (uint32_t)pattern_num * (uint32_t)PAT_BYTES;
+        if (fseek(mod_file, (long)offset, SEEK_SET) != 0) return 1;
+        prefetch_seek_done = 1;
+        prefetch_bytes_done = 0;
+    }
+
+    if (prefetch_bytes_done >= PAT_BYTES) return 0;
+
+    chunk = (uint16_t)(PAT_BYTES - prefetch_bytes_done);
+    if (chunk > 256u) chunk = 256u;
+
+    if (fread(dst + prefetch_bytes_done, 1, chunk, mod_file) != chunk) return 1;
+    prefetch_bytes_done = (uint16_t)(prefetch_bytes_done + chunk);
+
+    return (prefetch_bytes_done >= PAT_BYTES) ? 0 : 2;
+}
+
 /* -------------------------------------------------------
  * mod_prefetch_next_pattern() - called from MAIN LOOP only
  * Reads pat_next_num from disk into pat_next buffer.
  * ------------------------------------------------------- */
 uint8_t mod_prefetch_next_pattern(void)
 {
-    uint32_t offset;
+    uint8_t rc;
 
     if (!mod_need_prefetch)   return 0;
-    if (!mod_file)            return 1;
-    if (pat_next_num == 0xFF) { mod_need_prefetch = 0; return 0; }
+    if (pat_next_num == 0xFF) {
+        mod_need_prefetch = 0;
+        prefetch_seek_done = 0;
+        prefetch_bytes_done = 0;
+        return 0;
+    }
 
-    offset = pattern_data_offset
-           + (uint32_t)pat_next_num * (uint32_t)PAT_BYTES;
+    rc = s_fetch_pattern(pat_next_num, pat_next);
+    if (rc == 0u) {
+        mod_need_prefetch = 0;
+        prefetch_seek_done = 0;
+        prefetch_bytes_done = 0;
+        return 0;
+    }
 
-    if (fseek(mod_file, (long)offset, SEEK_SET) != 0) return 1;
-    if (fread(pat_next, 1, PAT_BYTES, mod_file) != PAT_BYTES) return 1;
+    if (rc == 2u) {
+        /* partial progress; keep mod_need_prefetch set */
+        return 0;
+    }
 
-    mod_need_prefetch = 0;
-    return 0;
+    /* error: reset partial state so a later retry restarts cleanly */
+    prefetch_seek_done = 0;
+    prefetch_bytes_done = 0;
+    return 1;
 }
 
 /* -------------------------------------------------------
@@ -498,21 +553,27 @@ uint8_t mod_load(const char *filename)
 #endif
     }
 
-    /* Pre-load pattern for order 0 into current buffer */
+    /* Pre-load pattern for order 0 into current buffer (blocking via fetch backend) */
     {
-        uint32_t off = pattern_data_offset
-                     + (uint32_t)mod.order_table[0] * (uint32_t)PAT_BYTES;
-        if (fseek(mod_file, (long)off, SEEK_SET) != 0) return 1;
-        if (fread(pat_current, 1, PAT_BYTES, mod_file) != PAT_BYTES) return 1;
+        uint8_t rc;
+        do {
+            rc = s_fetch_pattern(mod.order_table[0], pat_current);
+        } while (rc == 2u);
+        if (rc != 0u) return 1;
+        prefetch_seek_done = 0;
+        prefetch_bytes_done = 0;
         pat_current_num = mod.order_table[0];
     }
 
-    /* Pre-load pattern for order 1 into next buffer */
+    /* Pre-load pattern for order 1 into next buffer (blocking via fetch backend) */
     if (mod.song_length > 1u) {
-        uint32_t off = pattern_data_offset
-                     + (uint32_t)mod.order_table[1] * (uint32_t)PAT_BYTES;
-        if (fseek(mod_file, (long)off, SEEK_SET) != 0) return 1;
-        if (fread(pat_next, 1, PAT_BYTES, mod_file) != PAT_BYTES) return 1;
+        uint8_t rc;
+        do {
+            rc = s_fetch_pattern(mod.order_table[1], pat_next);
+        } while (rc == 2u);
+        if (rc != 0u) return 1;
+        prefetch_seek_done = 0;
+        prefetch_bytes_done = 0;
         pat_next_num = mod.order_table[1];
     }
 

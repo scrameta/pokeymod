@@ -184,6 +184,11 @@ extern uint8_t mod_row_buf[MOD_CHANNELS * 4];
  */
 void mod_file_close(void);
 
+/* Optional minimal hook to replace disk pattern fetch backend.
+ * Pass NULL to restore default disk fetch implementation.
+ */
+void mod_set_pattern_fetch_fn(uint8_t (*fetch_fn)(uint8_t pattern_num, uint8_t *dst));
+
 /*
  * mod_pattern_advance()
  * Called from VBI when order position changes. Swaps pattern buffers
