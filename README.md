@@ -191,16 +191,14 @@ Order:   3 / 16   Row: 42/64   BPM: 125  Speed: 6
 
 ## File Size Limits
 
-| Machine | Available RAM | Max MOD header+patterns |
-|---------|--------------|------------------------|
-| 800XL (64KB) | ~40KB after OS/player | ~32KB patterns + header |
-| 130XE (128KB) | ~100KB | ~64KB patterns (128 patterns max) |
-
 Sample data is streamed to PokeyMAX RAM during load and not kept in 6502 RAM,
 so sample data size is limited only by the 42KB PokeyMAX block RAM.
 
 For very large MODs (>42KB samples), ADPCM compression is applied automatically,
-giving effective capacity of ~168KB of original 8-bit sample data.
+giving effective capacity of ~84KB of original 8-bit sample data.
+
+For pattern data <= 16KB we store them in RAM - if there is space. 
+For pattern data > 16KB its stream from storage, which currently causes small glitches.
 
 ---
 
@@ -281,32 +279,26 @@ path.
 
 ## Known Limitations / Future Work
 
-1. **Pattern data RAM**: Large MODs with many patterns (>64) may not fit in 6502 RAM.
-   Solution: stream pattern data from disk during playback (requires DOS with random seek).
+1. **Sample offset effect (`9xx`)**: Not implemented. Needed by some MODs.
 
-2. **Sample offset effect (`9xx`)**: Not implemented. Needed by some MODs.
+2. **Volume slide (`Axx`, `5xx`, `6xx`)**: Not implemented. Common effect.
 
-3. **Volume slide (`Axx`, `5xx`, `6xx`)**: Not implemented. Common effect.
+3. **Position jump (`Bxx`)**: Not implemented.
 
-4. **Position jump (`Bxx`)**: Not implemented.
-
-5. **Sample looping ADPCM**: Loop points in ADPCM mode need careful alignment
+4. **Sample looping ADPCM**: Loop points in ADPCM mode need careful alignment
    to nibble boundaries. Currently the loop start/end may be slightly off for
    ADPCM samples.
 
-6. **SID / PSG mode**: The player could be extended to use SID or PSG chips for
+5. **SID / PSG mode**: The player could be extended to use SID or PSG chips for
    additional channels (e.g. 8-channel MODs or enhanced music).
-
-7. **XEX load segment**: On a 64KB machine the `mod_buffer` (64KB+) will overflow.
-   This needs a custom loader that pages the buffer through extended RAM on 130XE.
 
 ---
 
 ## Technical Notes
 
 ### Why IMA ADPCM?
-The PokeyMAX natively decodes IMA ADPCM at ~12-bit quality, giving 4:1
-compression vs 8-bit PCM. This means 42KB of block RAM can hold ~168KB of
+The PokeyMAX natively decodes IMA ADPCM at ~12-bit quality in 4 bits, giving 2:1
+compression vs 8-bit PCM. This means 42KB of block RAM can hold ~84KB of
 original sample data — enough for most 4-channel MODs from the Amiga era.
 
 ### Finetune
