@@ -26,33 +26,6 @@ static int8_t clamp_s8(int32_t x)
     return (int8_t)x;
 }
 
-static int8_t adpcm_decode_nibble(uint8_t nibble, ADPCMState *state)
-{
-    int32_t step = (int32_t)ima_step_table[state->step_index];
-    int32_t diff = step >> 3;
-    int32_t pred;
-    int8_t idx;
-
-    if (nibble & 4) diff += step;
-    if (nibble & 2) diff += (step >> 1);
-    if (nibble & 1) diff += (step >> 2);
-
-    pred = state->predictor;
-    if (nibble & 8) pred -= diff;
-    else            pred += diff;
-
-    if (pred > 32767) pred = 32767;
-    if (pred < -32768) pred = -32768;
-    state->predictor = (int16_t)pred;
-
-    idx = (int8_t)state->step_index + ima_index_table[nibble & 0x0F];
-    if (idx < 0) idx = 0;
-    if (idx > 88) idx = 88;
-    state->step_index = (uint8_t)idx;
-
-    return clamp_s8(pred >> 8);
-}
-
 int main(void)
 {
     int8_t input[SAMPLE_COUNT];
@@ -83,13 +56,8 @@ int main(void)
         return 1;
     }
 
-    for (i = 0; i < SAMPLE_COUNT; i += 2) {
-        uint8_t byte = encoded[i / 2];
-        /* PokeyMAX ADPCM consumes high nibble first (RTL top.vhdl). */
-        output[i] = adpcm_decode_nibble((byte >> 4) & 0x0F, &dec);
-        if (i + 1 < SAMPLE_COUNT)
-            output[i + 1] = adpcm_decode_nibble(byte & 0x0F, &dec);
-    }
+    /* PokeyMAX ADPCM consumes high nibble first (RTL top.vhdl). */
+    adpcm_decode_block(encoded, SAMPLE_COUNT, output, &dec);
 
     for (i = 0; i < SAMPLE_COUNT; i++) {
         int err = (int)input[i] - (int)output[i];
