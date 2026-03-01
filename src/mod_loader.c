@@ -19,6 +19,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+#include <stdlib.h>
 #if defined(__CC65__)
 #include <conio.h>
 #include <atari.h>
@@ -30,6 +31,7 @@
 #include "adpcm.h"
 
 #define PAT_BYTES   (MOD_ROWS_PER_PAT * MOD_CHANNELS * 4)   /* 1024 */
+#define PATTERN_RAM_CACHE_THRESHOLD_BYTES (6u * 1024u)
 
 static uint8_t pat_buf_a[PAT_BYTES];
 static uint8_t pat_buf_b[PAT_BYTES];
@@ -43,10 +45,13 @@ uint8_t mod_need_prefetch = 0;   /* main loop polls this */
 
 static FILE    *mod_file            = NULL;
 static uint32_t pattern_data_offset = 0;
+static uint8_t *pattern_ram_cache = NULL;
+static uint16_t pattern_ram_cache_size = 0;
 
 /* Minimal pluggable fetch backend (Step A): default = disk fetch) */
 typedef uint8_t (*PatternFetchFn)(uint8_t pattern_num, uint8_t *dst);
 static uint8_t disk_fetch_pattern(uint8_t pattern_num, uint8_t *dst);
+static uint8_t ram_fetch_pattern(uint8_t pattern_num, uint8_t *dst);
 static PatternFetchFn s_fetch_pattern = disk_fetch_pattern;
 
 /* Chunked prefetch state (256-byte slices to shorten SIO stalls) */
@@ -237,6 +242,11 @@ static uint16_t read_be16(const uint8_t *p)
 void mod_file_close(void)
 {
     if (mod_file) { fclose(mod_file); mod_file = NULL; }
+    if (pattern_ram_cache) {
+        free(pattern_ram_cache);
+        pattern_ram_cache = NULL;
+        pattern_ram_cache_size = 0;
+    }
 }
 
 void mod_set_pattern_fetch_fn(uint8_t (*fetch_fn)(uint8_t pattern_num, uint8_t *dst))
@@ -334,6 +344,19 @@ static uint8_t disk_fetch_pattern(uint8_t pattern_num, uint8_t *dst)
     return (prefetch_bytes_done >= PAT_BYTES) ? 0 : 2;
 }
 
+static uint8_t ram_fetch_pattern(uint8_t pattern_num, uint8_t *dst)
+{
+    uint32_t offset;
+
+    if (!pattern_ram_cache) return 1;
+
+    offset = (uint32_t)pattern_num * (uint32_t)PAT_BYTES;
+    if (offset + (uint32_t)PAT_BYTES > (uint32_t)pattern_ram_cache_size) return 1;
+
+    memcpy(dst, pattern_ram_cache + offset, PAT_BYTES);
+    return 0;
+}
+
 /* -------------------------------------------------------
  * mod_prefetch_next_pattern() - called from MAIN LOOP only
  * Reads pat_next_num from disk into pat_next buffer.
@@ -388,11 +411,19 @@ uint8_t mod_load(const char *filename)
     uint8_t  had_status_output;
     uint8_t  use_adpcm_global;
     uint32_t sample_data_offset;
+    uint32_t pattern_data_size;
 
     memset(&mod, 0, sizeof(mod));
     pat_current_num   = 0xFF;
     pat_next_num      = 0xFF;
     mod_need_prefetch = 0;
+
+    if (pattern_ram_cache) {
+        free(pattern_ram_cache);
+        pattern_ram_cache = NULL;
+        pattern_ram_cache_size = 0;
+    }
+    s_fetch_pattern = disk_fetch_pattern;
 
     if (mod_file) { fclose(mod_file); mod_file = NULL; }
     mod_file = fopen(filename, "rb");
@@ -444,11 +475,29 @@ uint8_t mod_load(const char *filename)
     mod.num_patterns++;
 
     pattern_data_offset = (uint32_t)ftell(mod_file);
+    pattern_data_size = (uint32_t)mod.num_patterns * (uint32_t)PAT_BYTES;
+
+    if (pattern_data_size > 0u &&
+        pattern_data_size <= (uint32_t)PATTERN_RAM_CACHE_THRESHOLD_BYTES) {
+        pattern_ram_cache = (uint8_t*)malloc((size_t)pattern_data_size);
+        if (pattern_ram_cache) {
+            pattern_ram_cache_size = (uint16_t)pattern_data_size;
+            if (fread(pattern_ram_cache, 1u, (size_t)pattern_data_size, mod_file)
+                == (size_t)pattern_data_size) {
+                s_fetch_pattern = ram_fetch_pattern;
+            } else {
+                free(pattern_ram_cache);
+                pattern_ram_cache = NULL;
+                pattern_ram_cache_size = 0;
+                if (fseek(mod_file, (long)pattern_data_offset, SEEK_SET) != 0) return 1;
+            }
+        }
+    }
 
     use_adpcm_global = (total_sample_bytes > (uint32_t)POKEYMAX_RAM_SIZE) ? 1u : 0u;
 
     sample_data_offset = pattern_data_offset
-                       + (uint32_t)mod.num_patterns * (uint32_t)PAT_BYTES;
+                       + pattern_data_size;
     if (fseek(mod_file, (long)sample_data_offset, SEEK_SET) != 0) return 1;
 
     pokeymax_init();
