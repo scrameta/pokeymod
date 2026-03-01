@@ -36,6 +36,8 @@ static uint8_t row_work_active = 0;
 static uint8_t row_work_channel = 0;
 static const uint8_t *row_work_data = 0;
 
+static uint8_t last_rtclock;
+
 
 static uint16_t apply_finetune(uint16_t period, int8_t ft)
 {
@@ -497,13 +499,20 @@ static void do_tick(void)
  * ------------------------------------------------------- */
 void mod_vbi_tick(void)
 {
+    uint8_t now = PEEK(RTCLOK);
+
+    uint8_t missed = now-last_rtclock;
+    last_rtclock = now;
     if (!mod.playing) return;
-    update_bpm_step();
-    bpm_accum += bpm_step;
-    while (bpm_accum >= 256u) {
-        bpm_accum -= 256u;
-        do_tick();
-        if (!mod.playing) return;
+
+    while (missed-- > 0){
+        update_bpm_step();
+        bpm_accum += bpm_step;
+        while (bpm_accum >= 256u) {
+            bpm_accum -= 256u;
+            do_tick();
+            if (!mod.playing) return;
+        }
     }
 }
 
@@ -513,6 +522,7 @@ void mod_vbi_tick(void)
 void mod_play(void)
 {
     uint8_t ch;
+    last_rtclock = PEEK(RTCLOK);
     if (mod.playing) return;
 
     /* Reset all channel state */
