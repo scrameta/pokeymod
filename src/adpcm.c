@@ -131,4 +131,48 @@ uint16_t adpcm_encode_block(const int8_t *src, uint16_t pcm_len,
     return out_bytes;
 }
 
+int8_t adpcm_decode_nibble(uint8_t nibble, ADPCMState *state)
+{
+    int32_t step = (int32_t)ima_step_table[state->step_index];
+    int32_t diff = step >> 3;
+    int32_t pred = state->predictor;
+    int8_t idx;
+
+    if (nibble & 4u) diff += step;
+    if (nibble & 2u) diff += (step >> 1);
+    if (nibble & 1u) diff += (step >> 2);
+
+    if (nibble & 8u) pred -= diff;
+    else             pred += diff;
+
+    if (pred > 32767) pred = 32767;
+    if (pred < -32768) pred = -32768;
+    state->predictor = (int16_t)pred;
+
+    idx = (int8_t)state->step_index + ima_index_table[nibble & 0x0Fu];
+    if (idx < 0) idx = 0;
+    if (idx > 88) idx = 88;
+    state->step_index = (uint8_t)idx;
+
+    /* 16-bit predictor to signed 8-bit PCM domain */
+    pred >>= 8;
+    if (pred > 127) pred = 127;
+    if (pred < -128) pred = -128;
+    return (int8_t)pred;
+}
+
+uint16_t adpcm_decode_block(const uint8_t *src, uint16_t sample_count,
+                            int8_t *dst, ADPCMState *state)
+{
+    uint16_t i;
+
+    for (i = 0; i < sample_count; i++) {
+        uint8_t byte = src[i >> 1];
+        uint8_t nibble = (uint8_t)((i & 1u) ? (byte & 0x0Fu) : ((byte >> 4) & 0x0Fu));
+        dst[i] = adpcm_decode_nibble(nibble, state);
+    }
+
+    return sample_count;
+}
+
 #undef ADPCM_ENCODE_NIBBLE

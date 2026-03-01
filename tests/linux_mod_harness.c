@@ -30,6 +30,7 @@
 
 #include "modplayer.h"
 #include "pokeymax_hw.h"
+#include "adpcm.h"
 uint8_t pokeymax_irq_pending=0;
 
 /* Legacy C handler retained in your tree; useful for desktop sim */
@@ -52,6 +53,11 @@ typedef struct {
     /* crude simulator state */
     uint32_t samples_remaining_q8; /* in samples<<8 */
     uint32_t play_pos_q16;        /* source sample index in Q16 */
+
+    /* ADPCM renderer state (reset on trigger/retrigger) */
+    ADPCMState adpcm_state;
+    uint16_t adpcm_decoded_pos;
+    int8_t adpcm_last;
 } MockChan;
 
 static struct {
@@ -96,6 +102,10 @@ static void mock_channel_start_or_retrigger(int idx) {
     uint32_t len = c->len_samples ? c->len_samples : 1u;
     c->samples_remaining_q8 = len << 8;
     c->play_pos_q16 = 0;
+    c->adpcm_state.predictor = 0;
+    c->adpcm_state.step_index = 0;
+    c->adpcm_decoded_pos = 0;
+    c->adpcm_last = 0;
     g.total_retriggers++;
     if (g.verbose) {
         fprintf(stdout,
@@ -288,12 +298,30 @@ static void wav_finish(void) {
     fclose(g.wav_fp);
     g.wav_fp = NULL;
 }
-static int8_t mock_fetch_pcm8(const MockChan *c) {
+static int8_t mock_fetch_pcm8(MockChan *c) {
     uint16_t pos = (uint16_t)(c->play_pos_q16 >> 16);
     if (pos >= c->len_samples) return 0;
-    uint32_t a = (uint32_t)c->addr + pos;
-    if (a >= POKEYMAX_RAM_SIZE) return 0;
-    return (int8_t)g.ram[a];
+
+    if (!c->is_adpcm) {
+        uint32_t a = (uint32_t)c->addr + pos;
+        if (a >= POKEYMAX_RAM_SIZE) return 0;
+        return (int8_t)g.ram[a];
+    }
+
+    while (c->adpcm_decoded_pos <= pos) {
+        uint16_t sample_idx = c->adpcm_decoded_pos;
+        uint32_t byte_addr = (uint32_t)c->addr + (uint32_t)(sample_idx >> 1);
+        uint8_t byte;
+        uint8_t nibble;
+        if (byte_addr >= POKEYMAX_RAM_SIZE) return 0;
+
+        byte = g.ram[byte_addr];
+        nibble = (uint8_t)((sample_idx & 1u) ? (byte & 0x0Fu) : ((byte >> 4) & 0x0Fu));
+        c->adpcm_last = adpcm_decode_nibble(nibble, &c->adpcm_state);
+        c->adpcm_decoded_pos++;
+    }
+
+    return c->adpcm_last;
 }
 static uint32_t period_to_samples_per_out_q16(uint16_t hw_period, uint32_t out_rate_hz) {
     const uint32_t clock_hz = 3546895u;
