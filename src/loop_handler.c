@@ -28,6 +28,7 @@ ChanState *pokeymax_mod_chan_base = &mod.chan[0];
 
 void pokeymax_loop_handler(void);
 void pokeymax_loop_irq_c(void);
+uint8_t mod_sample_irq_service(void);
 
 
 /* Optional C compatibility entry for IRQ path wrappers/tests. */
@@ -38,11 +39,18 @@ void pokeymax_loop_irq_c(void)
 
 void pokeymax_loop_handler(void)
 {
+    (void)mod_sample_irq_service();
+}
+
+uint8_t mod_sample_irq_service(void)
+{
     unsigned char active;
     unsigned char ch;
     unsigned char bit;
 
     active = PEEK(REG_IRQACT);
+    if (!active) return 0u;
+
     POKE(REG_IRQACT, 0x00);     /* clear all IRQ flags immediately */
 
     for (ch = 0; ch < MOD_CHANNELS; ch++) {
@@ -81,4 +89,6 @@ void pokeymax_loop_handler(void)
             }
         }
     }
+
+    return 1u;
 }
