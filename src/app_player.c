@@ -11,7 +11,7 @@ extern void vbi_install(void);
 extern void vbi_remove(void);
 
 #define MOD_KEY_NONE  255
-#define MOD_KEY_SPACE  32
+#define MOD_KEY_SPACE  33
 
 static uint8_t key_read_clear(void)
 {
@@ -49,7 +49,7 @@ void app_player_run(void)
     vbi_install();
     app_player_start();
 
-    while (mod.playing) {
+    while (mod.playing || paused) {
         display_status();
 
         (void)app_player_main_service();
