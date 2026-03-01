@@ -16,7 +16,7 @@
         .export _vbi_install
         .export _vbi_remove
         .import _mod_vbi_tick
-        .import _pokeymax_loop_handler
+        .import _pokeymax_loop_irq_fast
 
 ; OS equates
 VVBLKD      = $0224     ; deferred VBI vector (lo/hi)
@@ -45,7 +45,6 @@ old_vbi_hi:   .res 1
 old_irq_lo:   .res 1
 old_irq_hi:   .res 1
 zp_save_vbi:  .res ZP_SAVE_LEN   ; VBI zero page save area
-zp_save_irq:  .res ZP_SAVE_LEN   ; IRQ zero page save area (must be separate: IRQ can interrupt VBI)
 
 .code
 
@@ -178,30 +177,18 @@ zp_save_irq:  .res ZP_SAVE_LEN   ; IRQ zero page save area (must be separate: IR
         lda #BUSY_COLOR_IRQ
         sta COLBK
 
-        ; It's ours - save remaining regs and ZP
+        ; It's ours - save remaining regs only (fast asm path does not call C)
         txa
         pha
         tya
         pha
 
-        ldx #ZP_SAVE_LEN-1
-@save:  lda ZP_SAVE_START,x
-        sta zp_save_irq,x
-        dex
-        bpl @save
-
-        jsr _pokeymax_loop_handler
+        jsr _pokeymax_loop_irq_fast
 
         lda #0
         sta COLBK
 
-        ; loop_handler clears IRQACT internally
-
-        ldx #ZP_SAVE_LEN-1
-@rest:  lda zp_save_irq,x
-        sta ZP_SAVE_START,x
-        dex
-        bpl @rest
+        ; loop handler clears IRQACT internally
 
         pla
         tay

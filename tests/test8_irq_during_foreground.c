@@ -53,12 +53,13 @@ void mod_vbi_tick(void)
 }
 
 /* Called from IRQ hook in src/vbi_handler.s (THIS is the thing we suspect is unsafe) */
-void pokeymax_loop_handler(void)
+void pokeymax_loop_irq_c(void)
 {
     ++irq_count;
     POKE(REG_IRQACT, 0x00);   /* ACK all sample IRQ flags immediately */
     irq_pending = 1;          /* retrigger in foreground */
 }
+
 
 static uint8_t detect_sample_player(void)
 {

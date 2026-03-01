@@ -36,9 +36,7 @@ void mod_vbi_tick(void)
 }
 
 /* Required by src/vbi_handler.s (not used in this test) */
-void pokeymax_loop_handler(void)
-{
-}
+void pokeymax_loop_irq_c(){}
 
 int main(void)
 {

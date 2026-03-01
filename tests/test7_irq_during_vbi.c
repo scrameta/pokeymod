@@ -68,7 +68,7 @@ void mod_vbi_tick(void)
 }
 
 /* Called from IRQ hook in src/vbi_handler.s */
-void pokeymax_loop_handler(void)
+void pokeymax_loop_irq_c(void)
 {
     ++irq_count;
     if (in_vbi) {
@@ -79,6 +79,7 @@ void pokeymax_loop_handler(void)
     POKE(REG_IRQACT, 0x00);   /* ACK sample IRQ */
     irq_pending = 1;          /* retrigger in foreground */
 }
+
 
 static uint8_t detect_sample_player(void)
 {

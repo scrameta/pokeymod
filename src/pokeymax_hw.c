@@ -26,9 +26,9 @@
 #include "pokeymax_hw.h"
 
 uint16_t pokeymax_ram_ptr = 0;
-static uint8_t pokeymax_samcfg_shadow = 0xF0;
-static uint8_t pokeymax_dma_shadow    = 0x00;
-static uint8_t pokeymax_irqen_shadow  = 0x00;
+uint8_t pokeymax_samcfg_shadow = 0xF0;
+uint8_t pokeymax_dma_shadow    = 0x00;
+uint8_t pokeymax_irqen_shadow  = 0x00;
 
 void pokeymax_init(void)
 {

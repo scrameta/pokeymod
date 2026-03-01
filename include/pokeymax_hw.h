@@ -12,6 +12,10 @@
 #define POKEYMAX_ALLOC_FAIL 0xFFFFU
 
 extern uint16_t pokeymax_ram_ptr;
+extern uint8_t pokeymax_samcfg_shadow;
+extern uint8_t pokeymax_dma_shadow;
+extern uint8_t pokeymax_irqen_shadow;
+
 
 /* Initialise hardware, reset allocator, silence all channels */
 void pokeymax_init(void);

@@ -31,6 +31,9 @@
 #define POKEYMAX_RAM_SIZE 43008U
 #define POKEYMAX_ALLOC_FAIL 0xFFFFU
 
+/* Required by src/vbi_handler.s (not used in this test) */
+void pokeymax_loop_irq_c(){}
+
 /* Amiga period table C-1..B-3 */
 static uint16_t read_be16(const uint8_t *p)
 {

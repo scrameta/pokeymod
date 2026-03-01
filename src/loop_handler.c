@@ -10,9 +10,31 @@
  */
 
 #include <stdint.h>
+#include <stddef.h>
 #include "pokeymax.h"
 #include "pokeymax_hw.h"
 #include "modplayer.h"
+
+#ifdef __CC65__
+typedef char _assert_chan_size[(sizeof(ChanState)==31)?1:-1];
+typedef char _assert_cs_active[(offsetof(ChanState, active)==30)?1:-1];
+typedef char _assert_cs_looplen[(offsetof(ChanState, loop_len)==24)?1:-1];
+#endif
+
+#ifdef __CC65__
+/* Exported for 6502 asm IRQ path so it does not depend on ModPlayer layout */
+ChanState *pokeymax_mod_chan_base = &mod.chan[0];
+#endif
+
+void pokeymax_loop_handler(void);
+void pokeymax_loop_irq_c(void);
+
+
+/* Optional C compatibility entry for IRQ path wrappers/tests. */
+void pokeymax_loop_irq_c(void)
+{
+    pokeymax_loop_handler();
+}
 
 void pokeymax_loop_handler(void)
 {
