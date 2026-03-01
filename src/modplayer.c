@@ -32,6 +32,9 @@ extern const uint16_t finetune_ratio[16];
 extern const uint8_t  vibrato_sine[64];
 
 static uint8_t master_volume = 63;
+static uint8_t row_work_active = 0;
+static uint8_t row_work_channel = 0;
+static const uint8_t *row_work_data = 0;
 
 
 static uint16_t apply_finetune(uint16_t period, int8_t ft)
@@ -103,23 +106,15 @@ static void trigger_sample(uint8_t hw_chan, ChanState *cs)
 }
 
 /* -------------------------------------------------------
- * process_row - called on tick 0
+ * process_row_slice - incremental row decode for VBI budget
  * ------------------------------------------------------- */
-static void process_row(void)
+static void process_row_slice(uint8_t max_channels)
 {
-    uint8_t        ch;
-    uint8_t        pattern;
-    const uint8_t *row_data;
-
-    pattern = mod.order_table[mod.order_pos];
-    if (mod_get_row_ptr(pattern, mod.row, &row_data) != 0) return;
-
-    mod.pattern_break = 0;
-    mod.do_jump       = 0;
-
-    for (ch = 0; ch < MOD_CHANNELS; ch++, row_data += 4u) {
+    while (max_channels > 0u && row_work_channel < MOD_CHANNELS) {
+        uint8_t ch = row_work_channel;
         ChanState *cs = &mod.chan[ch];
         uint8_t    hw = (uint8_t)(ch + 1u);
+        const uint8_t *row_data = row_work_data + (uint16_t)ch * 4u;
         uint8_t    b0 = row_data[0];
         uint8_t    b1 = row_data[1];
         uint8_t    b2 = row_data[2];
@@ -272,7 +267,34 @@ static void process_row(void)
         }
 
         skip_trigger: ;
+
+        row_work_channel++;
+        max_channels--;
     }
+
+    if (row_work_channel >= MOD_CHANNELS) {
+        row_work_active = 0;
+    }
+}
+
+static void begin_row_work(void)
+{
+    uint8_t pattern;
+    const uint8_t *row_data;
+
+    pattern = mod.order_table[mod.order_pos];
+    if (mod_get_row_ptr(pattern, mod.row, &row_data) != 0) {
+        row_work_active = 0;
+        row_work_channel = MOD_CHANNELS;
+        row_work_data = 0;
+        return;
+    }
+
+    row_work_data    = row_data;
+    row_work_channel = 0;
+    row_work_active  = 1;
+    mod.pattern_break = 0;
+    mod.do_jump       = 0;
 }
 
 /* -------------------------------------------------------
@@ -409,10 +431,23 @@ static void do_tick(void)
     if (mod.tick == 0u) {
         if (mod.pattern_delay > 0u) {
             mod.pattern_delay--;
+            row_work_active = 0;
+            row_work_channel = 0;
+            row_work_data = 0;
         } else {
-            process_row();
+            begin_row_work();
         }
-    } else {
+    }
+
+    if (row_work_active) {
+        uint8_t remaining_channels = (uint8_t)(MOD_CHANNELS - row_work_channel);
+        uint8_t remaining_ticks = (mod.speed > mod.tick) ? (uint8_t)(mod.speed - mod.tick) : 1u;
+        uint8_t budget = (uint8_t)((remaining_channels + remaining_ticks - 1u) / remaining_ticks);
+        if (budget == 0u) budget = 1u;
+        process_row_slice(budget);
+    }
+
+    if (mod.tick != 0u) {
         update_effects();
     }
 
@@ -494,6 +529,9 @@ void mod_play(void)
     mod.order_pos = 0;
     mod.row       = 0;
     mod.tick      = 0;
+    row_work_active = 0;
+    row_work_channel = 0;
+    row_work_data = 0;
     bpm_accum     = 0;
     last_bpm      = 0;
 
@@ -510,6 +548,9 @@ void mod_play(void)
 void mod_stop(void)
 {
     mod.playing = 0;
+    row_work_active = 0;
+    row_work_channel = 0;
+    row_work_data = 0;
     POKE(REG_DMA,    0x00);
     POKE(REG_IRQEN,  0x00);
     POKE(REG_COVOX_CH1, 0);
