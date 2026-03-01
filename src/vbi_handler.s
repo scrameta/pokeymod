@@ -17,7 +17,7 @@
         .export _vbi_remove
         .import _mod_vbi_tick
         .import _pokeymax_loop_irq_fast
-        .importzp sp
+        .importzp c_sp
 
 ; OS equates
 VVBLKD      = $0224     ; deferred VBI vector (lo/hi)
@@ -32,7 +32,7 @@ BUSY_COLOR_VBI = $38    ; red green pulse while VBI music tick runs
 BUSY_COLOR_IRQ = $68    ; blue pulse while sample IRQ loop handler runs
 
 ; cc65 zero page on Atari target starts at $82.
-; It uses 26 bytes ($1A): sp, sreg, regsave, ptr1-4, tmp1-4, regbank
+; It uses 26 bytes ($1A): c_sp, sreg, regsave, ptr1-4, tmp1-4, regbank
 ; i.e. $82..$9B. Save/restore all of these when calling C from ISR.
 ZP_SAVE_START = $82
 ZP_SAVE_LEN   = 26     ; save $82..$9B
@@ -144,23 +144,23 @@ vbi_cstack:    .res VBI_CSTACK_SIZE
         ; Switch cc65 software stack to a private VBI stack before calling C.
         ; Even though we restore zero-page state, sharing the same software
         ; stack with interrupted foreground C code can overwrite active frames.
-        lda sp
+        lda c_sp
         sta saved_sp
-        lda sp+1
+        lda c_sp+1
         sta saved_sp+1
         lda #<(vbi_cstack + VBI_CSTACK_SIZE)
-        sta sp
+        sta c_sp
         lda #>(vbi_cstack + VBI_CSTACK_SIZE)
-        sta sp+1
+        sta c_sp+1
 
         ; Call C tick function
         jsr _mod_vbi_tick
 
         ; Restore foreground cc65 software stack.
         lda saved_sp
-        sta sp
+        sta c_sp
         lda saved_sp+1
-        sta sp+1
+        sta c_sp+1
 
         cli
 
