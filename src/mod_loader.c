@@ -496,14 +496,14 @@ uint8_t mod_load(const char *filename)
     if (s_fetch_pattern==ram_fetch_pattern)
         printf("Using RAM for patterns\n");
     else
-        printf("Streaming patterns of size %lx\n",pattern_data_size);
+        printf("Streaming patterns of size %ld\n",pattern_data_size);
 
     use_adpcm_global = (total_sample_bytes > (uint32_t)POKEYMAX_RAM_SIZE) ? 1u : 0u;
     if (total_sample_bytes > (2*(uint32_t)POKEYMAX_RAM_SIZE))
     {
         printf("Not enough PokeyMAX ram to load samples\n");
-        printf("Needed   :%6lx\nAvailable:%6lx\n",use_adpcm_global ? total_sample_bytes/2: total_sample_bytes , (int32_t)POKEYMAX_RAM_SIZE);
-	exit(0);
+        printf("Needed   :%6ld\nAvailable:%6ld\n",use_adpcm_global ? total_sample_bytes/2: total_sample_bytes , (int32_t)POKEYMAX_RAM_SIZE);
+	//exit(0);
     }
 
     sample_data_offset = pattern_data_offset
