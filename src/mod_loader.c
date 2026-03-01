@@ -84,13 +84,11 @@ static void load_progress_begin(LoadProgressUI *ui, uint16_t source_total)
     ui->sample_name[0]= 0;
 
     printf("Sample load progress\n");
-    printf("Load 00/00   0%% T:00000000\n");
+    printf("Load 00/00   0%%\n");
     printf("Name: %-22.22s\n", "");
     printf("Fmt:----- Len:00000 St:-------\n");
-    printf("Src:00000000/00000000\n");
+    printf("Src:%8lu/%8lu\n", 0UL, (unsigned long)source_total);
     printf("Dst:00000000\n");
-    gotoxy(18, ui->base_row + 1u);
-    printf("%8lu", (unsigned long)source_total);
     ui->source_total = source_total;
     fflush(stdout);
 }
