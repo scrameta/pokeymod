@@ -157,6 +157,20 @@ typedef struct {
  * ------------------------------------------------------- */
 extern ModPlayer mod;
 
+typedef struct {
+    void (*begin)(void *ctx, uint32_t source_total);
+    void (*update)(void *ctx,
+                   const SampleInfo *si,
+                   uint16_t sample_index,
+                   uint16_t total_samples,
+                   uint32_t source_loaded,
+                   uint32_t source_total,
+                   uint32_t stored_loaded,
+                   uint8_t skipped);
+    void (*end)(void *ctx);
+    void *ctx;
+} ModLoadProgressPlugin;
+
 /* -------------------------------------------------------
  * API
  * ------------------------------------------------------- */
@@ -188,6 +202,13 @@ void mod_file_close(void);
  * Pass NULL to restore default disk fetch implementation.
  */
 void mod_set_pattern_fetch_fn(uint8_t (*fetch_fn)(uint8_t pattern_num, uint8_t *dst));
+
+/*
+ * Load progress/status plugin for mod_load().
+ * Pass NULL to disable plugin output entirely.
+ */
+void mod_set_load_progress_plugin(const ModLoadProgressPlugin *plugin);
+extern const ModLoadProgressPlugin mod_default_load_progress_plugin;
 
 /*
  * mod_pattern_advance()
@@ -231,6 +252,13 @@ void mod_vbi_tick(void);
  * Master volume 0-63. Applied to all channels.
  */
 void mod_set_volume(uint8_t vol);
+
+/*
+ * mod_sample_irq_service()
+ * Fast service function for PokeyMAX sample-end IRQs.
+ * Returns 1 if a sample IRQ was pending and handled, 0 if not pending.
+ */
+uint8_t mod_sample_irq_service(void);
 
 /*
  * mod_get_row() / mod_get_order()

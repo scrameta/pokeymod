@@ -209,7 +209,9 @@ include/
   adpcm.h          IMA ADPCM encoder API
 
 src/
-  main.c           Main program, file loading, UI
+  main.c           Default entry: loader stage then player stage
+  app_loader.c     Loader stage (hardware detect + MOD load + summaries)
+  app_player.c     Player stage (VBI install, playback loop, controls)
   modplayer.c      MOD player tick engine, effects
   mod_loader.c     MOD file parser + sample uploader
   pokeymax_hw.c    PokeyMAX hardware driver
@@ -218,6 +220,55 @@ src/
   tables.c         Amiga period table, vibrato sine table
   vbi_handler.s    6502 ASM: VBI hook + IRQ chain
 ```
+
+## Embedding in demo loaders
+
+The app is now split into two callable stages:
+
+- `app_loader_run(filename, show_progress_ui)`
+- `app_player_run()`
+
+For custom demo frameworks (own VBI/DLI/IRQ/main loop), use the lower-level
+player hooks instead of `app_player_run()`:
+
+- `app_player_start()` once after successful load
+- `app_player_vbi_tick()` from your deferred VBI/music tick callback
+- `app_player_irq_handler()` from your IRQ chain head
+  - returns `0` quickly when IRQ is not PokeyMAX sample-end; chain onward
+  - returns `1` when serviced
+- `app_player_main_service()` from foreground/main loop
+  - call once per frame (`N=1`) for robust pattern streaming
+  - does at most one 256-byte chunk per call when prefetch is due
+  - rough worst-case on 1050-class drives: ~25ms for an active chunk read
+- `app_player_stop(close_file)` when done
+
+Minimal chaining pattern:
+
+```c
+void my_deferred_vbi(void) {
+    app_player_vbi_tick();
+}
+
+void my_irq(void) {
+    if (!app_player_irq_handler()) {
+        chain_to_prev_irq();
+    }
+}
+
+void my_main_loop_step(void) {
+    (void)app_player_main_service();
+}
+```
+
+For memory-sensitive demo chains, you can call the loader stage during your
+own load/init path, optionally disable the default load-time UI plugin by
+passing `show_progress_ui=0`, then call only the player stage from your run
+path.
+
+`mod_load()` progress output is pluggable via:
+
+- `mod_set_load_progress_plugin(&mod_default_load_progress_plugin)` (default)
+- `mod_set_load_progress_plugin(NULL)` (silent)
 
 ---
 
