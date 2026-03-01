@@ -175,6 +175,7 @@ uint8_t mod_load(const char *filename);
  * Called by the player engine on each new row.
  */
 uint8_t mod_read_row(uint8_t pattern, uint8_t row);
+uint8_t mod_get_row_ptr(uint8_t pattern, uint8_t row, const uint8_t **row_ptr);
 extern uint8_t mod_row_buf[MOD_CHANNELS * 4];
 
 /*
