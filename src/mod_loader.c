@@ -696,7 +696,8 @@ uint8_t mod_load(const char *filename)
     progress_started    = 0;
     had_status_output   = 0;
 
-    for (i = 1; i <= MOD_MAX_SAMPLES; i++) {
+    for (i = 1; i <= total_samples_to_load; i++)  // Supposed to go to MOD_MAX_SAMPLES, but that corrupts patterns. Reason unknown.
+    {
         SampleInfo *si = &mod.samples[i];
         uint16_t    ram_addr, ram_needed;
         uint16_t    remaining, chunk, written, out_len;
