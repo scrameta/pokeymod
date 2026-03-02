@@ -574,13 +574,28 @@ uint8_t mod_load(const char *filename)
             uint8_t bank_load_ok = 1u;
 
             for (bank_i = 0u; bank_i < required_banks; bank_i++) {
-                uint16_t chunk = (remaining > BANK_WINDOW_SIZE) ? BANK_WINDOW_SIZE : (uint16_t)remaining;
-                PIA.portb = bank_portb_for((uint8_t)(pattern_bank_first + bank_i));
-                if (fread((void*)0x4000u, 1u, chunk, mod_file) != chunk) {
-                    bank_load_ok = 0u;
-                    break;
+                uint16_t bank_bytes = (remaining > BANK_WINDOW_SIZE) ? BANK_WINDOW_SIZE : (uint16_t)remaining;
+                uint16_t bank_off = 0u;
+
+                while (bank_off < bank_bytes) {
+                    uint16_t chunk = (uint16_t)(bank_bytes - bank_off);
+                    if (chunk > SECTOR_SIZE) chunk = SECTOR_SIZE;
+
+                    /* Keep normal PORTB mapping during disk I/O (CIO/fread). */
+                    if (fread(sector_buf, 1u, chunk, mod_file) != chunk) {
+                        bank_load_ok = 0u;
+                        break;
+                    }
+
+                    PIA.portb = bank_portb_for((uint8_t)(pattern_bank_first + bank_i));
+                    memcpy((void*)(0x4000u + bank_off), sector_buf, chunk);
+                    PIA.portb = portb_saved;
+
+                    bank_off = (uint16_t)(bank_off + chunk);
                 }
-                remaining -= (uint32_t)chunk;
+
+                if (!bank_load_ok) break;
+                remaining -= (uint32_t)bank_bytes;
             }
 
             PIA.portb = portb_saved;
