@@ -35,6 +35,9 @@ uint8_t pokeymax_irq_pending=0;
 
 /* Legacy C handler retained in your tree; useful for desktop sim */
 void pokeymax_loop_handler(void);
+extern uint8_t pmdbg_last_irq_bits;
+extern uint8_t pmdbg_irq_count_total;
+extern uint8_t pmdbg_irq_count_ch[4];
 
 /* ---------- Mock PokeyMAX register + sample engine ---------- */
 
@@ -76,6 +79,7 @@ static struct {
 
     int verbose;
     int trace_boundary;
+    int use_c_loop_handler;
 
     /* WAV render */
     int wav_enabled;
@@ -160,6 +164,15 @@ static void mock_step_sample_engine_one_vbi(void) {
     }
 }
 
+static void mock_service_loop_irqs_if_needed(void) {
+    if (!g.use_c_loop_handler) return;
+    if ((pokeymax_mock_peek(REG_IRQACT) & 0x0Fu) == 0) return;
+    pmdbg_last_irq_bits = pokeymax_mock_peek(REG_IRQACT) & 0x0Fu;
+    pmdbg_irq_count_total++;
+    for (int ch = 0; ch < 4; ch++) if (pmdbg_last_irq_bits & (1u<<ch)) pmdbg_irq_count_ch[ch]++;
+    pokeymax_loop_handler();
+}
+
 /* Shim functions called by PEEK/POKE macros */
 uint8_t pokeymax_mock_peek(uint16_t addr) {
     return g.regs[addr];
@@ -197,10 +210,35 @@ void pokeymax_mock_poke(uint16_t addr, uint8_t val) {
             if (g.chansel >= 1 && g.chansel <= 4) {
                 MockChan *c = &g.ch[g.chansel - 1];
                 c->configured = 1;
-                c->addr = (uint16_t)(g.regs[REG_ADDRL] | ((uint16_t)g.regs[REG_ADDRH] << 8));
-                c->len_samples = (uint16_t)(1u + g.regs[REG_LENL] + ((uint16_t)g.regs[REG_LENH] << 8));
-                c->period = (uint16_t)(g.regs[REG_PERL] | ((uint16_t)(g.regs[REG_PERH] & 0x0Fu) << 8));
-                c->vol = (uint8_t)(g.regs[REG_VOL] & 0x3Fu);
+                switch (addr) {
+                    case REG_ADDRL:
+                        c->addr = (uint16_t)((c->addr & 0xFF00u) | val);
+                        break;
+                    case REG_ADDRH:
+                        c->addr = (uint16_t)((c->addr & 0x00FFu) | ((uint16_t)val << 8));
+                        break;
+                    case REG_LENL: {
+                        uint16_t lminus1 = (uint16_t)((c->len_samples ? (c->len_samples - 1u) : 0u) & 0xFF00u);
+                        lminus1 = (uint16_t)(lminus1 | val);
+                        c->len_samples = (uint16_t)(lminus1 + 1u);
+                        break;
+                    }
+                    case REG_LENH: {
+                        uint16_t lminus1 = (uint16_t)((c->len_samples ? (c->len_samples - 1u) : 0u) & 0x00FFu);
+                        lminus1 = (uint16_t)(lminus1 | ((uint16_t)val << 8));
+                        c->len_samples = (uint16_t)(lminus1 + 1u);
+                        break;
+                    }
+                    case REG_PERL:
+                        c->period = (uint16_t)((c->period & 0x0F00u) | val);
+                        break;
+                    case REG_PERH:
+                        c->period = (uint16_t)((c->period & 0x00FFu) | (((uint16_t)val & 0x0Fu) << 8));
+                        break;
+                    case REG_VOL:
+                        c->vol = (uint8_t)(val & 0x3Fu);
+                        break;
+                }
                 mock_channel_recalc_mode(g.chansel - 1);
             }
             return;
@@ -341,21 +379,65 @@ static void mock_render_audio_for_one_vbi(void) {
             MockChan *c = &g.ch[i];
             uint8_t bit = (uint8_t)(1u << i);
             c->dma_on = (g.regs[REG_DMA] & bit) ? 1u : 0u;
+            c->irq_en = (g.regs[REG_IRQEN] & bit) ? 1u : 0u;
             if (!c->dma_on || !c->configured) continue;
 
-            int8_t s = mock_fetch_pcm8(c);
+            int8_t s8 = mock_fetch_pcm8(c);
 
             /* simple linear-ish volume scaling (0..64-ish) */
             int v = (int)(c->vol & 0x3Fu);
-            mix += ((int)s * v) / 32;
+            mix += ((int)s8 * v) / 32;
 
-            /* advance source position (rough timing) */
-            c->play_pos_q16 += period_to_samples_per_out_q16(c->period ? c->period : 1u, g.wav_rate);
-            {
-                uint16_t pos = (uint16_t)(c->play_pos_q16 >> 16);
-                if (pos >= c->len_samples) {
-                    /* clamp at end until loop handler retriggers on next VBI */
-                    if (c->len_samples) c->play_pos_q16 = ((uint32_t)(c->len_samples - 1u) << 16);
+            /* advance source position (rough timing), but service end IRQs immediately */
+            uint32_t inc_q16 = period_to_samples_per_out_q16(c->period ? c->period : 1u, g.wav_rate);
+            uint32_t guard = 0;
+            while (inc_q16) {
+                uint16_t len = c->len_samples;
+                if (!len) {
+                    c->play_pos_q16 = 0;
+                    break;
+                }
+
+                uint32_t len_q16 = ((uint32_t)len << 16);
+                uint32_t pos_q16 = c->play_pos_q16;
+                if (pos_q16 >= len_q16) pos_q16 = c->play_pos_q16 = ((uint32_t)(len - 1u) << 16);
+
+                /* amount to reach end boundary (exclusive) */
+                uint32_t to_end_q16 = (len_q16 > pos_q16) ? (len_q16 - pos_q16) : 0u;
+                if (to_end_q16 == 0u) to_end_q16 = 1u;
+
+                if (inc_q16 < to_end_q16) {
+                    c->play_pos_q16 = pos_q16 + inc_q16;
+                    inc_q16 = 0;
+                    break;
+                }
+
+                /* consume up to/past end */
+                inc_q16 -= to_end_q16;
+                c->play_pos_q16 = ((uint32_t)(len - 1u) << 16);
+
+                if (c->irq_en) {
+                    g.regs[REG_IRQACT] |= bit;
+                    g.total_irqs++;
+                }
+                mock_service_loop_irqs_if_needed();
+
+                /* refresh state after possible retrigger/reprogram by loop handler */
+                c = &g.ch[i];
+                c->dma_on = (g.regs[REG_DMA] & bit) ? 1u : 0u;
+                c->irq_en = (g.regs[REG_IRQEN] & bit) ? 1u : 0u;
+
+                if (!c->dma_on) break;
+
+                /* If no retrigger occurred, avoid infinite looping at sample end */
+                if (c->play_pos_q16 >= (((uint32_t)(c->len_samples ? c->len_samples : 1u) << 16) - 1u)) {
+                    /* one-shot / no immediate loop service path: stay clamped */
+                    break;
+                }
+
+                if (++guard > 64u) {
+                    /* Safety: absurdly tiny loops at high pitch can wrap many times per output sample */
+                    break;
                 }
             }
         }
@@ -437,6 +519,8 @@ int main(int argc, char **argv) {
         printf("WAV output: %s @ %u Hz (gain=%d)\n", wav_path, (unsigned)g.wav_rate, g.wav_gain);
     }
 
+    g.use_c_loop_handler = use_c_loop_handler;
+
     dump_pos("start");
 
     uint8_t prev_order = mod_get_order();
@@ -444,19 +528,14 @@ int main(int argc, char **argv) {
     uint8_t prev_tick = mod.tick;
 
     for (g.frame_no = 0; g.frame_no < max_frames && mod.playing; g.frame_no++) {
-        /* Simulate hardware progress and IRQ generation */
-        mock_step_sample_engine_one_vbi();
-
-        /* Service sample-end IRQs via legacy C helper (desktop approximation) */
-        if (use_c_loop_handler && (pokeymax_mock_peek(REG_IRQACT) & 0x0Fu)) {
-            pmdbg_last_irq_bits = pokeymax_mock_peek(REG_IRQACT) & 0x0Fu;
-            pmdbg_irq_count_total++;
-            for (int ch = 0; ch < 4; ch++) if (pmdbg_last_irq_bits & (1u<<ch)) pmdbg_irq_count_ch[ch]++;
-            pokeymax_loop_handler();
+        if (g.wav_enabled) {
+            /* Accurate desktop debug path: render advances sample engine and services loop IRQs immediately. */
+            mock_render_audio_for_one_vbi();
+        } else {
+            /* Fast non-audio path: VBI-granularity hardware progress is good enough for tracing. */
+            mock_step_sample_engine_one_vbi();
+            mock_service_loop_irqs_if_needed();
         }
-
-        /* Render audible output for this frame window (crude desktop mix) */
-        mock_render_audio_for_one_vbi();
 
         /* VBI tick (player logic) */
         pokeymax_mock_poke(RTCLOK,pokeymax_mock_peek(RTCLOK)+1);
