@@ -36,17 +36,25 @@ typedef struct {
  * In-memory decoded sample info
  * ------------------------------------------------------- */
 typedef struct {
-    uint16_t length;         /* in bytes (decoded from words) */
+    /* MOD header/source domain (before downsampling/compression) */
+    uint16_t src_len_bytes;           /* source PCM length in bytes */
     int8_t   finetune;       /* -8..+7 */
     uint8_t  volume;         /* 0-64 */
-    uint16_t loop_start;     /* byte offset */
-    uint16_t loop_len;       /* in bytes; 0 or 2 = no loop */
+    uint16_t src_loop_start_bytes;    /* source loop start byte offset */
+    uint16_t src_loop_len_bytes;      /* source loop length in bytes; 0 or 2 = no loop */
+
+    /* Playback domain (after downsampling, before compression) */
+    uint16_t play_len_samples;        /* playback length in samples (post-downsample) */
+    uint16_t play_loop_start_samples; /* playback loop start in samples (post-downsample) */
+    uint16_t play_loop_len_samples;   /* playback loop length in samples (post-downsample) */
+
+    /* Stored/RAM domain (after downsampling + optional ADPCM compression) */
     uint8_t  has_loop;
     uint16_t pokeymax_addr;  /* address in PokeyMAX block RAM */
-    uint16_t pokeymax_len;   /* actual length stored (may be ADPCM compressed) */
+    uint16_t pokeymax_stored_len_bytes; /* bytes stored in PokeyMAX RAM */
     uint8_t  is_adpcm;       /* 1 if stored as ADPCM in PokeyMAX RAM */
     uint8_t  is_8bit;        /* 1 if stored as 8-bit signed (default for small) */
-    uint8_t  downsample_factor; /* 1=none, 2=half-rate, 4=quarter-rate (skip bytes) */
+    uint8_t  downsample_factor; /* source decimation factor: 1=none, 2=half-rate, 4=quarter-rate */
     char     name[MOD_SAMPLE_NAME_LEN + 1]; /* null-terminated for debug/UI */
 } SampleInfo;
 

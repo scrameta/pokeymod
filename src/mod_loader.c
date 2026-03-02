@@ -78,7 +78,7 @@ typedef struct {
     uint8_t  base_row;
     uint16_t sample_index;
     uint16_t total_samples;
-    uint16_t sample_len;
+    uint16_t sample_len;      /* source PCM bytes (pre-downsample/pre-compression) */
     uint32_t source_loaded;
     uint32_t source_total;
     uint32_t stored_loaded;
@@ -182,10 +182,10 @@ static void load_progress_update_default(void *ctx,
         ui->downsample_factor = si->downsample_factor;
     }
 
-    if (si->length != ui->sample_len) {
+    if (si->src_len_bytes != ui->sample_len) {
         gotoxy(16, ui->base_row + 2u);
-        printf("%5u", (unsigned)si->length);
-        ui->sample_len = si->length;
+        printf("%5u", (unsigned)si->src_len_bytes);
+        ui->sample_len = si->src_len_bytes;
     }
 
     if (skipped != ui->skipped) {
@@ -220,7 +220,7 @@ static void load_progress_update_default(void *ctx,
            (unsigned)total_samples,
            si->name[0] ? si->name : "(unnamed)",
            si->is_adpcm ? "ADPCM" : "PCM",
-           (unsigned)si->length,
+           (unsigned)si->src_len_bytes,
            (unsigned long)source_loaded,
            (unsigned long)source_total,
            (unsigned long)stored_loaded,
@@ -514,17 +514,20 @@ uint8_t mod_load(const char *filename)
         }
         while (j < MOD_SAMPLE_NAME_LEN) si->name[j++] = 0;
         si->name[MOD_SAMPLE_NAME_LEN] = 0;
-        si->length     = read_be16(hdr_buf + 22) * 2u;
+        si->src_len_bytes     = read_be16(hdr_buf + 22) * 2u;
         si->finetune   = (int8_t)(hdr_buf[24] & 0x0Fu);
         if (si->finetune > 7) si->finetune -= 16;
         si->volume     = (hdr_buf[25] > 64u) ? 64u : hdr_buf[25];
-        si->loop_start = read_be16(hdr_buf + 26) * 2u;
-        si->loop_len   = read_be16(hdr_buf + 28) * 2u;
-        si->has_loop   = (si->loop_len > 2u) ? 1u : 0u;
-        if (si->has_loop && (si->loop_start + si->loop_len) > si->length)
-            si->loop_len = si->length - si->loop_start;
-        if (si->length > 0u) {
-            total_sample_bytes += si->length;
+        si->src_loop_start_bytes = read_be16(hdr_buf + 26) * 2u;
+        si->src_loop_len_bytes   = read_be16(hdr_buf + 28) * 2u;
+        si->has_loop   = (si->src_loop_len_bytes > 2u) ? 1u : 0u;
+        if (si->has_loop && (si->src_loop_start_bytes + si->src_loop_len_bytes) > si->src_len_bytes)
+            si->src_loop_len_bytes = si->src_len_bytes - si->src_loop_start_bytes;
+        si->play_len_samples = si->src_len_bytes;
+        si->play_loop_start_samples = si->src_loop_start_bytes;
+        si->play_loop_len_samples = si->src_loop_len_bytes;
+        if (si->src_len_bytes > 0u) {
+            total_sample_bytes += si->src_len_bytes;
             total_samples_to_load++;
         }
     }
@@ -638,18 +641,18 @@ uint8_t mod_load(const char *filename)
             si->downsample_factor = 1u;
             si->is_adpcm = 0u;
             si->is_8bit  = 1u;
-            if (si->length == 0u) continue;
-            needed += (uint32_t)si->length;
+            if (si->src_len_bytes == 0u) continue;
+            needed += (uint32_t)si->src_len_bytes;
         }
 
         /* Apply ADPCM to eligible samples if we exceed RAM */
         if (needed > (uint32_t)POKEYMAX_RAM_SIZE) {
             for (j = 1u; j <= MOD_MAX_SAMPLES; j++) {
                 SampleInfo *si = &mod.samples[j];
-                if (si->length == 0u) continue;
-                if (si->length > 512u && !si->has_loop) {
-                    uint32_t old_cost = (uint32_t)si->length;
-                    uint32_t new_cost = ((uint32_t)si->length + 1u) / 2u;
+                if (si->src_len_bytes == 0u) continue;
+                if (si->src_len_bytes > 512u && !si->has_loop) {
+                    uint32_t old_cost = (uint32_t)si->src_len_bytes;
+                    uint32_t new_cost = ((uint32_t)si->src_len_bytes + 1u) / 2u;
                     needed = needed - old_cost + new_cost;
                     si->is_adpcm = 1u;
                     si->is_8bit  = 0u;
@@ -678,7 +681,7 @@ uint8_t mod_load(const char *filename)
             /* Build sorted candidate list (all samples with length>0) */
             for (j = 1u; j <= MOD_MAX_SAMPLES; j++) {
                 SampleInfo *sj = &mod.samples[j];
-                if (sj->length == 0u) continue;
+                if (sj->src_len_bytes == 0u) continue;
 
                 /* Sort key: looped-PCM > non-looped-ADPCM, then length desc.
                  * Looped PCM: has_loop && !is_adpcm
@@ -690,7 +693,7 @@ uint8_t mod_load(const char *filename)
                     uint8_t sj_looped_pcm = (sj->has_loop && !sj->is_adpcm) ? 1u : 0u;
                     uint8_t sk_wins = 0u;
                     if (sk_looped_pcm && !sj_looped_pcm) sk_wins = 1u;
-                    else if (sk_looped_pcm == sj_looped_pcm && sk->length >= sj->length) sk_wins = 1u;
+                    else if (sk_looped_pcm == sj_looped_pcm && sk->src_len_bytes >= sj->src_len_bytes) sk_wins = 1u;
                     if (sk_wins) break;
                     cand[k] = cand[k - 1u];
                     k--;
@@ -712,11 +715,11 @@ uint8_t mod_load(const char *filename)
                         uint32_t ds_new = (uint32_t)target_factor;
                         uint32_t old_cost, new_cost;
                         if (sc->is_adpcm) {
-                            old_cost = ((uint32_t)sc->length / ds_old + 1u) / 2u;
-                            new_cost = ((uint32_t)sc->length / ds_new + 1u) / 2u;
+                            old_cost = ((uint32_t)sc->src_len_bytes / ds_old + 1u) / 2u;
+                            new_cost = ((uint32_t)sc->src_len_bytes / ds_new + 1u) / 2u;
                         } else {
-                            old_cost = (uint32_t)sc->length / ds_old;
-                            new_cost = (uint32_t)sc->length / ds_new;
+                            old_cost = (uint32_t)sc->src_len_bytes / ds_old;
+                            new_cost = (uint32_t)sc->src_len_bytes / ds_new;
                         }
                         needed = needed - old_cost + new_cost;
                         sc->downsample_factor = target_factor;
@@ -751,16 +754,16 @@ uint8_t mod_load(const char *filename)
         for (j = 1u; j <= MOD_MAX_SAMPLES; j++) {
             uint8_t fi;
             SampleInfo *si = &mod.samples[j];
-            if (si->length == 0u) continue;
+            if (si->src_len_bytes == 0u) continue;
             fi = (si->downsample_factor == 8u) ? 3u :
                          (si->downsample_factor == 4u) ? 2u :
                          (si->downsample_factor == 2u) ? 1u : 0u;
             if (si->is_adpcm) {
                 na[fi]++;
-                abytes += ((uint32_t)si->length / (uint32_t)si->downsample_factor + 1u) / 2u;
+                abytes += ((uint32_t)si->src_len_bytes / (uint32_t)si->downsample_factor + 1u) / 2u;
             } else {
                 np[fi]++;
-                pbytes += (uint32_t)si->length / (uint32_t)si->downsample_factor;
+                pbytes += (uint32_t)si->src_len_bytes / (uint32_t)si->downsample_factor;
             }
         }
         printf("ADPCM/ 2:%u 4:%u 8:%u 16:%u =%lub\n",
@@ -799,7 +802,7 @@ uint8_t mod_load(const char *filename)
         uint16_t    remaining, chunk, written, out_len;
         ADPCMState  adpcm_state;
 
-        if (si->length == 0u) continue;
+        if (si->src_len_bytes == 0u) continue;
 
         if (!progress_started) {
             if (s_progress_plugin && s_progress_plugin->begin) {
@@ -809,12 +812,14 @@ uint8_t mod_load(const char *filename)
             progress_started = 1;
         }
 
-        /* Compression plan already set by Pass 1 (is_adpcm, is_8bit,
-         * downsample_factor).  Just compute ram_needed from it. */
+        /* Compression plan already set by Pass 1.
+         * src_len_bytes is pre-downsample source PCM bytes.
+         * play_len_samples is post-downsample playback length (samples).
+         * pokeymax_stored_len_bytes is post-compression stored RAM bytes. */
         if (si->is_adpcm) {
-            ram_needed = (si->length / (uint16_t)si->downsample_factor + 1u) / 2u;
+            ram_needed = (si->src_len_bytes / (uint16_t)si->downsample_factor + 1u) / 2u;
         } else {
-            ram_needed = (si->length + (uint16_t)si->downsample_factor - 1u)
+            ram_needed = (si->src_len_bytes + (uint16_t)si->downsample_factor - 1u)
                          / (uint16_t)si->downsample_factor;
         }
 
@@ -832,24 +837,25 @@ uint8_t mod_load(const char *filename)
                                           1u);
             }
             had_status_output = 1;
-            fseek(mod_file, (long)si->length, SEEK_CUR);
-            si->length = 0;
+            fseek(mod_file, (long)si->src_len_bytes, SEEK_CUR);
+            si->play_len_samples = 0u;
+            si->pokeymax_stored_len_bytes = 0u;
             continue;
         }
 
         si->pokeymax_addr = ram_addr;
-        si->pokeymax_len  = ram_needed;
+        si->pokeymax_stored_len_bytes  = ram_needed;
 
-        /* Adjust loop points for downsampled samples */
-        if (si->downsample_factor > 1u) {
-            si->loop_start = si->loop_start / si->downsample_factor;
-            si->loop_len   = si->loop_len   / si->downsample_factor;
-            if (si->loop_len < 2u && si->has_loop) si->loop_len = 2u;
-        }
+        /* Loader->player handoff values (post-downsample, pre-compression). */
+        si->play_len_samples = (si->src_len_bytes + (uint16_t)si->downsample_factor - 1u)
+                             / (uint16_t)si->downsample_factor;
+        si->play_loop_start_samples = si->src_loop_start_bytes / si->downsample_factor;
+        si->play_loop_len_samples   = si->src_loop_len_bytes   / si->downsample_factor;
+        if (si->play_loop_len_samples < 2u && si->has_loop) si->play_loop_len_samples = 2u;
 
         adpcm_state.predictor  = 0;
         adpcm_state.step_index = 0;
-        remaining = si->length;
+        remaining = si->src_len_bytes;
         written   = 0;
 
         while (remaining > 0u) {
@@ -898,7 +904,7 @@ uint8_t mod_load(const char *filename)
                                           si,
                                           (uint16_t)(loaded_samples + 1u),
                                           total_samples_to_load,
-                                          (uint32_t)(loaded_source_bytes + (si->length - remaining)),
+                                          (uint32_t)(loaded_source_bytes + (si->src_len_bytes - remaining)),
                                           total_sample_bytes,
                                           (uint32_t)(loaded_stored_bytes + written),
                                           0u);
@@ -907,13 +913,8 @@ uint8_t mod_load(const char *filename)
         }
 
         loaded_samples++;
-        loaded_source_bytes += si->length;  /* source length, before any override */
-        /* Update si->length to reflect the actual stored size:
-         * - downsampled PCM: stored = length / downsample_factor
-         * - ADPCM (any ds): stored = pokeymax_len (already computed correctly)
-         * Always use pokeymax_len as the authoritative stored size. */
-        si->length = si->pokeymax_len;
-        loaded_stored_bytes += si->pokeymax_len;
+        loaded_source_bytes += si->src_len_bytes;
+        loaded_stored_bytes += si->pokeymax_stored_len_bytes;
     }
 
     if (had_status_output) {

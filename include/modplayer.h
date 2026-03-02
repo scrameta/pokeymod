@@ -99,9 +99,9 @@ typedef struct {
 
     /* Sample playback state */
     uint16_t sam_addr;      /* address in PokeyMAX RAM */
-    uint16_t sam_len;       /* sample length in samples */
-    uint16_t loop_start;    /* loop start in samples */
-    uint16_t loop_len;      /* loop length in samples */
+    uint16_t sam_len;       /* playback length in samples (post-downsample, pre-compression) */
+    uint16_t loop_start;    /* playback loop start in samples (post-downsample) */
+    uint16_t loop_len;      /* playback loop length in samples (post-downsample) */
     uint8_t  has_loop;
     uint8_t  is_adpcm;
     uint8_t  is_8bit;

@@ -82,8 +82,8 @@ static void trigger_sample(uint8_t hw_chan, ChanState *cs)
 
     if (cs->sample_num == 0 || cs->sample_num > MOD_MAX_SAMPLES) return;
     si = &mod.samples[cs->sample_num];
-    if (si->length == 0) return;
-    if (si->pokeymax_len == 0) return;
+    if (si->play_len_samples == 0) return;
+    if (si->pokeymax_stored_len_bytes == 0) return;
     if (cs->period == 0) return;
 
     hw_period = cs->period;
@@ -98,9 +98,10 @@ static void trigger_sample(uint8_t hw_chan, ChanState *cs)
     }
 
     cs->sam_addr   = si->pokeymax_addr;
-    cs->sam_len    = si->length;
-    cs->loop_start = si->loop_start;
-    cs->loop_len   = si->loop_len;
+    /* Player consumes post-downsample playback units (samples), not stored bytes. */
+    cs->sam_len    = si->play_len_samples;
+    cs->loop_start = si->play_loop_start_samples;
+    cs->loop_len   = si->play_loop_len_samples;
     cs->has_loop   = si->has_loop;
     cs->is_adpcm   = si->is_adpcm;
     cs->is_8bit    = si->is_8bit;
