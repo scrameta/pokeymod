@@ -170,11 +170,6 @@ modplay.xex myfile.mod
 
 # Enable pattern banking (auto profile)
 modplay.xex --b myfile.mod
-
-# Enable pattern banking with explicit PORTB bit mask (hex byte)
-modplay.xex --b 01 myfile.mod      # 1 bit set -> 1 bank
-modplay.xex --b 03 myfile.mod      # 2 bits set -> 4 banks
-modplay.xex --b 07 myfile.mod      # 3 bits set -> 8 banks
 ```
 
 ...or better (for more RAM):
@@ -187,14 +182,8 @@ X modplay.xex myfile.mod
 Loads `D1:MOD.DAT` from drive 1.
 
 **Pattern bank options:**
-- `--b` enables banked patterns using auto profile.
-- `--b <hex>` or `--b=<hex>` sets banking with a **single PORTB bit mask**.
-  - Set bits indicate PORTB bank-select bits used by the bank window.
-  - Number of banks is derived from how many bits are set:
-    - 1 bit set -> 1 bank
-    - 2 bits set -> 4 banks
-    - 3 bits set -> 8 banks
-  - `00` disables banked patterns.
+- `--b` enables 130XE-style banked pattern mode (CPU+ANTIC) using 4 banks.
+  This gives a 64KB pattern window strategy and avoids long bank codes in CLI.
 - `--no-pattern-banks` disables banked pattern backend explicitly.
 
 If omitted, the default bank range is disabled (`0,0`). You can set build-time
@@ -204,8 +193,8 @@ defaults for `modplay.xex` with:
 - `-DMODPLAY_DEFAULT_PATTERN_BANK_COUNT=<n>`
 
 Auto profile for `--b` (no value) is configurable at build time:
-- `-DMODPLAY_AUTO_PATTERN_BANK_FIRST=<n>` (default `4`)
-- `-DMODPLAY_AUTO_PATTERN_BANK_COUNT=<n>` (default `8`)
+- `-DMODPLAY_AUTO_PATTERN_BANK_FIRST=<n>` (default `0`)
+- `-DMODPLAY_AUTO_PATTERN_BANK_COUNT=<n>` (default `4`)
 
 **Controls:**
 - `SPACE` – Pause / Resume
