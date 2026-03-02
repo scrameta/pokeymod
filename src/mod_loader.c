@@ -33,6 +33,8 @@
 #define PAT_BYTES   (MOD_ROWS_PER_PAT * MOD_CHANNELS * 4)   /* 1024 */
 #define PATTERN_RAM_CACHE_THRESHOLD_BYTES (16u * 1024u)
 
+#define BANK_WINDOW_SIZE 0x4000u
+
 static uint8_t pat_buf_a[PAT_BYTES];
 static uint8_t pat_buf_b[PAT_BYTES];
 
@@ -47,11 +49,18 @@ static FILE    *mod_file            = NULL;
 static uint32_t pattern_data_offset = 0;
 static uint8_t *pattern_ram_cache = NULL;
 static uint16_t pattern_ram_cache_size = 0;
+static uint32_t pattern_bank_cache_size = 0;
+
+#if defined(__CC65__)
+static uint8_t pattern_bank_first = 0u;
+static uint8_t pattern_bank_count = 0u;
+#endif
 
 /* Minimal pluggable fetch backend (Step A): default = disk fetch) */
 typedef uint8_t (*PatternFetchFn)(uint8_t pattern_num, uint8_t *dst);
 static uint8_t disk_fetch_pattern(uint8_t pattern_num, uint8_t *dst);
 static uint8_t ram_fetch_pattern(uint8_t pattern_num, uint8_t *dst);
+static uint8_t bank_fetch_pattern(uint8_t pattern_num, uint8_t *dst);
 static PatternFetchFn s_fetch_pattern = disk_fetch_pattern;
 
 /* Chunked prefetch state (256-byte slices to shorten SIO stalls) */
@@ -247,6 +256,13 @@ static uint16_t read_be16(const uint8_t *p)
     return ((uint16_t)p[0] << 8) | p[1];
 }
 
+#if defined(__CC65__)
+static uint8_t bank_portb_for(uint8_t bank)
+{
+    return (uint8_t)((PIA.portb & 0xF0u) | (bank & 0x0Fu));
+}
+#endif
+
 void mod_file_close(void)
 {
     if (mod_file) { fclose(mod_file); mod_file = NULL; }
@@ -255,6 +271,7 @@ void mod_file_close(void)
         pattern_ram_cache = NULL;
         pattern_ram_cache_size = 0;
     }
+    pattern_bank_cache_size = 0;
 }
 
 void mod_set_pattern_fetch_fn(uint8_t (*fetch_fn)(uint8_t pattern_num, uint8_t *dst))
@@ -262,6 +279,17 @@ void mod_set_pattern_fetch_fn(uint8_t (*fetch_fn)(uint8_t pattern_num, uint8_t *
     s_fetch_pattern = fetch_fn ? fetch_fn : disk_fetch_pattern;
     prefetch_seek_done = 0;
     prefetch_bytes_done = 0;
+}
+
+void mod_set_pattern_bank_range(uint8_t first_bank, uint8_t bank_count)
+{
+#if defined(__CC65__)
+    pattern_bank_first = first_bank;
+    pattern_bank_count = bank_count;
+#else
+    (void)first_bank;
+    (void)bank_count;
+#endif
 }
 
 void mod_set_load_progress_plugin(const ModLoadProgressPlugin *plugin)
@@ -365,6 +393,37 @@ static uint8_t ram_fetch_pattern(uint8_t pattern_num, uint8_t *dst)
     return 0;
 }
 
+static uint8_t bank_fetch_pattern(uint8_t pattern_num, uint8_t *dst)
+{
+#if defined(__CC65__)
+    uint32_t offset;
+    uint16_t bank_offset;
+    uint8_t  bank_rel;
+    uint8_t  portb_saved;
+    const uint8_t *src;
+
+    offset = (uint32_t)pattern_num * (uint32_t)PAT_BYTES;
+    if (offset + (uint32_t)PAT_BYTES > pattern_bank_cache_size) return 1;
+
+    bank_rel = (uint8_t)(offset >> 14);
+    if (bank_rel >= pattern_bank_count) return 1;
+    bank_offset = (uint16_t)(offset & (BANK_WINDOW_SIZE - 1u));
+
+    portb_saved = PIA.portb;
+    PIA.portb = bank_portb_for((uint8_t)(pattern_bank_first + bank_rel));
+
+    src = (const uint8_t*)0x4000u + bank_offset;
+    memcpy(dst, src, PAT_BYTES);
+
+    PIA.portb = portb_saved;
+    return 0;
+#else
+    (void)pattern_num;
+    (void)dst;
+    return 1;
+#endif
+}
+
 /* -------------------------------------------------------
  * mod_prefetch_next_pattern() - called from MAIN LOOP only
  * Reads pat_next_num from disk into pat_next buffer.
@@ -431,6 +490,7 @@ uint8_t mod_load(const char *filename)
         pattern_ram_cache = NULL;
         pattern_ram_cache_size = 0;
     }
+    pattern_bank_cache_size = 0;
     s_fetch_pattern = disk_fetch_pattern;
 
     if (mod_file) { fclose(mod_file); mod_file = NULL; }
@@ -501,8 +561,44 @@ uint8_t mod_load(const char *filename)
             }
         }
     }
+
+#if defined(__CC65__)
+    if (s_fetch_pattern == disk_fetch_pattern &&
+        pattern_data_size > 0u &&
+        pattern_bank_count > 0u) {
+        uint8_t required_banks = (uint8_t)((pattern_data_size + (BANK_WINDOW_SIZE - 1u)) >> 14);
+        if (required_banks <= pattern_bank_count) {
+            uint8_t bank_i;
+            uint8_t portb_saved = PIA.portb;
+            uint32_t remaining = pattern_data_size;
+            uint8_t bank_load_ok = 1u;
+
+            for (bank_i = 0u; bank_i < required_banks; bank_i++) {
+                uint16_t chunk = (remaining > BANK_WINDOW_SIZE) ? BANK_WINDOW_SIZE : (uint16_t)remaining;
+                PIA.portb = bank_portb_for((uint8_t)(pattern_bank_first + bank_i));
+                if (fread((void*)0x4000u, 1u, chunk, mod_file) != chunk) {
+                    bank_load_ok = 0u;
+                    break;
+                }
+                remaining -= (uint32_t)chunk;
+            }
+
+            PIA.portb = portb_saved;
+
+            if (bank_load_ok) {
+                pattern_bank_cache_size = pattern_data_size;
+                s_fetch_pattern = bank_fetch_pattern;
+            } else if (fseek(mod_file, (long)pattern_data_offset, SEEK_SET) != 0) {
+                return 1;
+            }
+        }
+    }
+#endif
+
     if (s_fetch_pattern==ram_fetch_pattern)
         printf("Using RAM for patterns\n");
+    else if (s_fetch_pattern==bank_fetch_pattern)
+        printf("Using banked RAM for patterns\n");
     else
         printf("Streaming patterns of size %ld\n",pattern_data_size);
 
