@@ -800,6 +800,8 @@ uint8_t mod_load(const char *filename)
         SampleInfo *si = &mod.samples[i];
         uint16_t    ram_addr, ram_needed;
         uint16_t    remaining, chunk, written, out_len;
+        uint16_t    play_written_samples;
+        uint8_t     ds_phase;
         ADPCMState  adpcm_state;
 
         if (si->src_len_bytes == 0u) continue;
@@ -846,9 +848,9 @@ uint8_t mod_load(const char *filename)
         si->pokeymax_addr = ram_addr;
         si->pokeymax_stored_len_bytes  = ram_needed;
 
-        /* Loader->player handoff values (post-downsample, pre-compression). */
-        si->play_len_samples = (si->src_len_bytes + (uint16_t)si->downsample_factor - 1u)
-                             / (uint16_t)si->downsample_factor;
+        /* Loader->player handoff values are finalized from actual streamed output
+         * below (post-downsample playback samples and post-compression stored bytes).
+         * Seed loop mapping now from source-byte domain -> playback-sample domain. */
         si->play_loop_start_samples = si->src_loop_start_bytes / si->downsample_factor;
         si->play_loop_len_samples   = si->src_loop_len_bytes   / si->downsample_factor;
         if (si->play_loop_len_samples < 2u && si->has_loop) si->play_loop_len_samples = 2u;
@@ -857,6 +859,8 @@ uint8_t mod_load(const char *filename)
         adpcm_state.step_index = 0;
         remaining = si->src_len_bytes;
         written   = 0;
+        play_written_samples = 0u;
+        ds_phase = 0u;
 
         while (remaining > 0u) {
             chunk = (remaining > SECTOR_SIZE) ? SECTOR_SIZE : remaining;
@@ -872,30 +876,44 @@ uint8_t mod_load(const char *filename)
                 if (si->downsample_factor > 1u) {
                     uint16_t k, di = 0u;
                     uint8_t  factor = si->downsample_factor;
-                    for (k = 0u; k < chunk; k += factor)
-                        adpcm_out[di++] = sector_buf[k];
+                    for (k = 0u; k < chunk; k++) {
+                        if (ds_phase == 0u) {
+                            adpcm_out[di++] = sector_buf[k];
+                            ds_phase = (uint8_t)(factor - 1u);
+                        } else {
+                            ds_phase--;
+                        }
+                    }
                     src_ptr = (const int8_t*)adpcm_out;
                     src_len = di;
                 } else {
                     src_ptr = (const int8_t*)sector_buf;
                     src_len = chunk;
                 }
+                play_written_samples += src_len;
                 out_len = adpcm_encode_block(src_ptr, src_len,
                                              enc_buf, &adpcm_state);
                 pokeymax_write_ram(ram_addr + written, enc_buf, out_len);
                 written += out_len;
             } else if (si->downsample_factor > 1u) {
-                /* Downsample: pick every Nth byte into adpcm_out (reuse as temp buf) */
+                /* Downsample with cross-chunk phase continuity: keep every Nth source sample. */
                 uint16_t k, out_idx = 0;
                 uint8_t  factor = si->downsample_factor;
-                for (k = 0u; k < chunk; k += factor) {
-                    adpcm_out[out_idx++] = sector_buf[k];
+                for (k = 0u; k < chunk; k++) {
+                    if (ds_phase == 0u) {
+                        adpcm_out[out_idx++] = sector_buf[k];
+                        ds_phase = (uint8_t)(factor - 1u);
+                    } else {
+                        ds_phase--;
+                    }
                 }
                 pokeymax_write_ram(ram_addr + written, adpcm_out, out_idx);
                 written += out_idx;
+                play_written_samples += out_idx;
             } else {
                 pokeymax_write_ram(ram_addr + written, sector_buf, chunk);
                 written += chunk;
+                play_written_samples += chunk;
             }
             remaining -= chunk;
 
@@ -910,6 +928,20 @@ uint8_t mod_load(const char *filename)
                                           0u);
             }
             had_status_output = 1;
+        }
+
+        si->play_len_samples = play_written_samples;
+        si->pokeymax_stored_len_bytes = written;
+        if (si->has_loop && si->play_loop_start_samples >= si->play_len_samples) {
+            si->has_loop = 0u;
+            si->play_loop_len_samples = 0u;
+        } else if (si->has_loop &&
+                   (uint16_t)(si->play_loop_start_samples + si->play_loop_len_samples) > si->play_len_samples) {
+            si->play_loop_len_samples = si->play_len_samples - si->play_loop_start_samples;
+            if (si->play_loop_len_samples < 2u) {
+                si->has_loop = 0u;
+                si->play_loop_len_samples = 0u;
+            }
         }
 
         loaded_samples++;
