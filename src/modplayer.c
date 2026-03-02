@@ -88,12 +88,11 @@ static void trigger_sample(uint8_t hw_chan, ChanState *cs)
 
     hw_period = cs->period;
 
-    /* Downsampled samples use fewer playback samples, so shorten period by N
-     * to keep timing aligned with the decimated sample stream. */
+    /* Downsampled samples contain fewer samples for the same source duration.
+     * Increase period by N so playback clock is slower and pitch stays correct. */
     if (si->downsample_factor > 1u) {
-        uint16_t div = (uint16_t)si->downsample_factor;
-        hw_period = (uint16_t)(hw_period / div);
-        if (hw_period == 0u) hw_period = 1u;
+        uint32_t adj = (uint32_t)hw_period * (uint32_t)si->downsample_factor;
+        hw_period = (adj > 0xFFFFUL) ? 0xFFFFu : (uint16_t)adj;
     }
 
     cs->sam_addr   = si->pokeymax_addr;
