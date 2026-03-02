@@ -38,6 +38,37 @@ static const uint8_t *row_work_data = 0;
 
 static uint8_t last_rtclock;
 
+#ifndef FX_VOLSLIDE
+#define FX_VOLSLIDE             0xA
+#endif
+#ifndef FX_POSITION_JUMP
+#define FX_POSITION_JUMP        0xB
+#endif
+#ifndef FX_TONE_PORTA_VOLSLIDE
+#define FX_TONE_PORTA_VOLSLIDE  0x5
+#endif
+#ifndef FX_VIBRATO_VOLSLIDE
+#define FX_VIBRATO_VOLSLIDE     0x6
+#endif
+
+static uint8_t apply_volslide(ChanState *cs, uint8_t param)
+{
+    uint8_t up = (uint8_t)((param >> 4) & 0x0Fu);
+    uint8_t dn = (uint8_t)(param & 0x0Fu);
+
+    /* ProTracker-compatible cheap path: if both nibbles are set, prefer up. */
+    if (up != 0u) {
+        uint8_t v = (uint8_t)(cs->volume + up);
+        cs->volume = (v > 64u) ? 64u : v;
+        return 1u;
+    }
+    if (dn != 0u) {
+        cs->volume = (dn > cs->volume) ? 0u : (uint8_t)(cs->volume - dn);
+        return 1u;
+    }
+    return 0u;
+}
+
 
 static uint16_t apply_finetune(uint16_t period, int8_t ft)
 {
@@ -54,6 +85,20 @@ static uint8_t scale_volume(uint8_t mod_vol)
 {
     uint16_t v = (uint16_t)mod_vol * (uint16_t)master_volume;
     return (uint8_t)(v / 64u);
+}
+
+
+static uint16_t hw_period_for_chan(const ChanState *cs, uint16_t mod_period)
+{
+    uint16_t hw_period = mod_period;
+    if (cs->sample_num != 0u && cs->sample_num <= MOD_MAX_SAMPLES) {
+        const SampleInfo *si = &mod.samples[cs->sample_num];
+        if (si->downsample_factor > 1u) {
+            uint32_t adj = (uint32_t)hw_period * (uint32_t)si->downsample_factor;
+            hw_period = (adj > 0xFFFFUL) ? 0xFFFFu : (uint16_t)adj;
+        }
+    }
+    return hw_period;
 }
 
 /* -------------------------------------------------------
@@ -86,16 +131,7 @@ static void trigger_sample(uint8_t hw_chan, ChanState *cs)
     if (si->pokeymax_len == 0) return;
     if (cs->period == 0) return;
 
-    hw_period = cs->period;
-
-    /* Downsampled samples play at 1/N the original rate.
-     * Multiply the period by N to restore the correct pitch
-     * (longer period = lower playback frequency = matches half/quarter rate data). */
-    if (si->downsample_factor > 1u) {
-        uint32_t adj = (uint32_t)hw_period * (uint32_t)si->downsample_factor;
-        /* Clamp to uint16_t max - if period overflows the hardware can't play it */
-        hw_period = (adj > 0xFFFFUL) ? 0xFFFFu : (uint16_t)adj;
-    }
+    hw_period = hw_period_for_chan(cs, cs->period);
 
     cs->sam_addr   = si->pokeymax_addr;
     cs->sam_len    = si->length;
@@ -164,13 +200,16 @@ static void process_row_slice(uint8_t max_channels)
         }
 
         /* New period (unless portamento) */
-        if (note_period != 0 && note_effect != FX_TONE_PORTAMENTO) {
+        if (note_period != 0 &&
+            note_effect != FX_TONE_PORTAMENTO &&
+            note_effect != FX_TONE_PORTA_VOLSLIDE) {
             int8_t ft = (cs->sample_num > 0) ?
                         mod.samples[cs->sample_num].finetune : 0;
             cs->period = apply_finetune(note_period, ft);
             hw_update_needed = 1;
         }
-        if (note_period != 0 && note_effect == FX_TONE_PORTAMENTO) {
+        if (note_period != 0 &&
+            (note_effect == FX_TONE_PORTAMENTO || note_effect == FX_TONE_PORTA_VOLSLIDE)) {
             int8_t ft = (cs->sample_num > 0) ?
                         mod.samples[cs->sample_num].finetune : 0;
             cs->target_period = apply_finetune(note_period, ft);
@@ -194,6 +233,21 @@ static void process_row_slice(uint8_t max_channels)
                 break;
             case FX_TONE_PORTAMENTO:
                 if (note_param != 0u) cs->port_speed = note_param;
+                break;
+            case FX_VOLSLIDE:
+                /* Axy runs on ticks 1..speed-1 only. */
+                break;
+            case FX_POSITION_JUMP:
+                mod.do_jump = 1u;
+                mod.jump_order = note_param;
+                mod.pattern_break = 1u;
+                mod.break_row = 0u;
+                break;
+            case FX_TONE_PORTA_VOLSLIDE:
+                /* 5xy uses previous portamento speed; row note sets target only. */
+                break;
+            case FX_VIBRATO_VOLSLIDE:
+                /* 6xy uses previous vibrato params; row note may still trigger. */
                 break;
             case FX_PATTERN_BREAK:
                 mod.pattern_break = 1;
@@ -263,7 +317,9 @@ static void process_row_slice(uint8_t max_channels)
         }
 
         /* Trigger sample if we have a new note (period != 0) */
-        if (note_period != 0u && note_effect != FX_TONE_PORTAMENTO) {
+        if (note_period != 0u &&
+            note_effect != FX_TONE_PORTAMENTO &&
+            note_effect != FX_TONE_PORTA_VOLSLIDE) {
             trigger_sample(hw, cs);
             cs->triggered = 1;
         } else if (note_sample != 0u && cs->period != 0u && !cs->active) {
@@ -274,7 +330,7 @@ static void process_row_slice(uint8_t max_channels)
 
         /* If no trigger happened, push any volume change to hardware */
         if (!cs->triggered && cs->active && hw_update_needed) {
-            pokeymax_channel_set_period_vol(hw, cs->period, cs->hw_vol);
+            pokeymax_channel_set_period_vol(hw, hw_period_for_chan(cs, cs->period), cs->hw_vol);
         }
 
         skip_trigger: ;
@@ -337,7 +393,7 @@ static void update_effects(void)
                         uint16_t div = (uint16_t)(256u + (uint16_t)offset * 14u);
                         base = (uint16_t)((uint32_t)base * 256UL / div);
                     }
-                    pokeymax_channel_set_period_vol(hw, base, cs->hw_vol);
+                    pokeymax_channel_set_period_vol(hw, hw_period_for_chan(cs, base), cs->hw_vol);
                 }
                 break;
 
@@ -375,8 +431,49 @@ static void update_effects(void)
                 vib_period = (int16_t)cs->period + delta;
                 if (vib_period < 113) vib_period = 113;
                 if (vib_period > 856) vib_period = 856;
-                pokeymax_channel_set_period_vol(hw, (uint16_t)vib_period, cs->hw_vol);
+                pokeymax_channel_set_period_vol(hw, hw_period_for_chan(cs, (uint16_t)vib_period), cs->hw_vol);
                 cs->vib_pos = (uint8_t)((cs->vib_pos + cs->vib_speed) & 63u);
+                break;
+            }
+
+            case FX_VOLSLIDE:
+                if (apply_volslide(cs, cs->param)) {
+                    cs->hw_vol = scale_volume(cs->volume);
+                    vol_changed = 1;
+                }
+                break;
+
+            case FX_TONE_PORTA_VOLSLIDE:
+                if (cs->period < cs->target_period) {
+                    cs->period += cs->port_speed;
+                    if (cs->period > cs->target_period) cs->period = cs->target_period;
+                } else if (cs->period > cs->target_period) {
+                    if (cs->period >= cs->port_speed) cs->period -= cs->port_speed;
+                    if (cs->period < cs->target_period) cs->period = cs->target_period;
+                }
+                period_changed = 1;
+                if (apply_volslide(cs, cs->param)) {
+                    cs->hw_vol = scale_volume(cs->volume);
+                    vol_changed = 1;
+                }
+                break;
+
+            case FX_VIBRATO_VOLSLIDE: {
+                uint8_t  vib_idx = cs->vib_pos & 63u;
+                int16_t  sv      = (int16_t)vibrato_sine[vib_idx];
+                int16_t  delta;
+                int16_t  vib_period;
+                if (sv > 127) sv -= 256;
+                delta = (int16_t)((sv * (int16_t)cs->vib_depth) >> 7);
+                vib_period = (int16_t)cs->period + delta;
+                if (vib_period < 113) vib_period = 113;
+                if (vib_period > 856) vib_period = 856;
+                pokeymax_channel_set_period_vol(hw, hw_period_for_chan(cs, (uint16_t)vib_period), cs->hw_vol);
+                cs->vib_pos = (uint8_t)((cs->vib_pos + cs->vib_speed) & 63u);
+                if (apply_volslide(cs, cs->param)) {
+                    cs->hw_vol = scale_volume(cs->volume);
+                    vol_changed = 1;
+                }
                 break;
             }
 
@@ -400,7 +497,7 @@ static void update_effects(void)
         }
 
         if ((period_changed || vol_changed) && cs->active) {
-            pokeymax_channel_set_period_vol(hw, cs->period, cs->hw_vol);
+            pokeymax_channel_set_period_vol(hw, hw_period_for_chan(cs, cs->period), cs->hw_vol);
         }
     }
 }
@@ -450,12 +547,12 @@ static void do_tick(void)
         }
     }
 
-    if (row_work_active) {
-        uint8_t remaining_channels = (uint8_t)(MOD_CHANNELS - row_work_channel);
-        uint8_t remaining_ticks = (mod.speed > mod.tick) ? (uint8_t)(mod.speed - mod.tick) : 1u;
-        uint8_t budget = (uint8_t)((remaining_channels + remaining_ticks - 1u) / remaining_ticks);
-        if (budget == 0u) budget = 1u;
-        process_row_slice(budget);
+    /* Correctness-critical: all row events must become visible atomically on tick 0.
+     * We still keep the row-work helper, but complete the whole row here. Splitting
+     * row decode/application across ticks causes channels to trigger late and sounds
+     * like wrong samples. */
+    if (row_work_active && mod.tick == 0u) {
+        process_row_slice(MOD_CHANNELS);
     }
 
     if (mod.tick != 0u) {
@@ -470,7 +567,8 @@ static void do_tick(void)
         if (mod.pattern_break) {
             mod.pattern_break = 0;
             mod.row = mod.break_row;
-            mod.order_pos++;
+            if (mod.do_jump) { mod.order_pos = mod.jump_order; mod.do_jump = 0u; }
+            else             { mod.order_pos++; }
             if (mod.order_pos >= mod.song_length) {
                 if (mod.loop_song) mod.order_pos = 0;
                 else { mod.playing = 0; return; }
@@ -486,7 +584,8 @@ static void do_tick(void)
             mod.row++;
             if (mod.row >= MOD_ROWS_PER_PAT) {
                 mod.row = 0;
-                mod.order_pos++;
+                if (mod.do_jump) { mod.order_pos = mod.jump_order; mod.do_jump = 0u; }
+                else             { mod.order_pos++; }
                 if (mod.order_pos >= mod.song_length) {
                     if (mod.loop_song) mod.order_pos = 0;
                     else { mod.playing = 0; return; }
@@ -548,6 +647,8 @@ void mod_play(void)
     mod.order_pos = 0;
     mod.row       = 0;
     mod.tick      = 0;
+    mod.do_jump   = 0;
+    mod.jump_order= 0;
     row_work_active = 0;
     row_work_channel = 0;
     row_work_data = 0;
