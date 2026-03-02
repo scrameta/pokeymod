@@ -168,8 +168,12 @@ Copy `modplay.xex` to your Atari (via SIO2PC, AtariMax, etc.) or include in an A
 ```
 modplay.xex myfile.mod
 
-# Enable pattern banking from $4000 window (PIA PORTB low nibble)
-modplay.xex --pattern-bank-range 4 8 myfile.mod
+# Enable pattern banking (auto profile)
+modplay.xex --b myfile.mod
+
+# Enable pattern banking with explicit value
+modplay.xex --b 48 myfile.mod      # hex nibbles: first=4, count=8
+modplay.xex --b 4,8 myfile.mod     # hex pair: first=4, count=8
 ```
 
 ...or better (for more RAM):
@@ -182,7 +186,12 @@ X modplay.xex myfile.mod
 Loads `D1:MOD.DAT` from drive 1.
 
 **Pattern bank options:**
-- `--pattern-bank-range <first_bank> <bank_count>` enables the banked pattern backend.
+- `--b` enables banked patterns using auto profile.
+- `--b <hex>` or `--b=<hex>` enables banked patterns with explicit config.
+  - `48` means `first_bank=0x4`, `bank_count=0x8`.
+  - `4,8` / `4:8` means `first_bank=0x04`, `bank_count=0x08`.
+  - decimal single value (e.g. `8`) sets `bank_count` with current/default `first_bank`.
+- `--pattern-bank-range <first_bank> <bank_count>` remains supported.
 - `--no-pattern-banks` disables banked pattern backend explicitly.
 
 If omitted, the default bank range is disabled (`0,0`). You can set build-time
@@ -190,6 +199,10 @@ defaults for `modplay.xex` with:
 
 - `-DMODPLAY_DEFAULT_PATTERN_BANK_FIRST=<n>`
 - `-DMODPLAY_DEFAULT_PATTERN_BANK_COUNT=<n>`
+
+Auto profile for `--b` (no value) is configurable at build time:
+- `-DMODPLAY_AUTO_PATTERN_BANK_FIRST=<n>` (default `4`)
+- `-DMODPLAY_AUTO_PATTERN_BANK_COUNT=<n>` (default `8`)
 
 **Controls:**
 - `SPACE` – Pause / Resume
