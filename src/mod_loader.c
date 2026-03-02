@@ -854,6 +854,12 @@ uint8_t mod_load(const char *filename)
         si->play_loop_start_samples = si->src_loop_start_bytes / si->downsample_factor;
         si->play_loop_len_samples   = si->src_loop_len_bytes   / si->downsample_factor;
         if (si->play_loop_len_samples < 2u && si->has_loop) si->play_loop_len_samples = 2u;
+        if (si->is_adpcm) {
+            /* ADPCM channels are one-shot only in this player: no loop retriggering. */
+            si->has_loop = 0u;
+            si->play_loop_start_samples = 0u;
+            si->play_loop_len_samples = 0u;
+        }
 
         adpcm_state.predictor  = 0;
         adpcm_state.step_index = 0;
@@ -932,7 +938,11 @@ uint8_t mod_load(const char *filename)
 
         si->play_len_samples = play_written_samples;
         si->pokeymax_stored_len_bytes = written;
-        if (si->has_loop && si->play_loop_start_samples >= si->play_len_samples) {
+        if (si->is_adpcm) {
+            si->has_loop = 0u;
+            si->play_loop_start_samples = 0u;
+            si->play_loop_len_samples = 0u;
+        } else if (si->has_loop && si->play_loop_start_samples >= si->play_len_samples) {
             si->has_loop = 0u;
             si->play_loop_len_samples = 0u;
         } else if (si->has_loop &&
