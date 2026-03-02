@@ -696,7 +696,7 @@ uint8_t mod_load(const char *filename)
     progress_started    = 0;
     had_status_output   = 0;
 
-    for (i = 1; i <= total_samples_to_load; i++)  // Supposed to go to MOD_MAX_SAMPLES, but that corrupts patterns. Reason unknown.
+    for (i = 1; i <= MOD_MAX_SAMPLES; i++)
     {
         SampleInfo *si = &mod.samples[i];
         uint16_t    ram_addr, ram_needed;
@@ -825,6 +825,9 @@ uint8_t mod_load(const char *filename)
             s_progress_plugin->end(s_progress_plugin->ctx);
         }
     }
+
+    if (mod_file) { fclose(mod_file); mod_file = NULL; }
+    mod_file = fopen(filename, "rb");
 
     /* Pre-load pattern for order 0 into current buffer (blocking via fetch backend) */
     {
