@@ -203,6 +203,13 @@ void mod_file_close(void);
  */
 void mod_set_pattern_fetch_fn(uint8_t (*fetch_fn)(uint8_t pattern_num, uint8_t *dst));
 
+/* Optional: configure a bank-switched pattern source (Atari XL/XE).
+ * Patterns are stored in a 16KB bank window selected through PIA PORTB.
+ * first_bank = first bank number used by pattern storage.
+ * bank_count = number of consecutive 16KB banks available (0 disables).
+ */
+void mod_set_pattern_bank_range(uint8_t first_bank, uint8_t bank_count);
+
 /*
  * Load progress/status plugin for mod_load().
  * Pass NULL to disable plugin output entirely.

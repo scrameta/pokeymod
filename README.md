@@ -167,6 +167,9 @@ Copy `modplay.xex` to your Atari (via SIO2PC, AtariMax, etc.) or include in an A
 **Run from SpartaDOS X or MyDOS:**
 ```
 modplay.xex myfile.mod
+
+# Enable pattern banking (auto profile)
+modplay.xex --b myfile.mod
 ```
 
 ...or better (for more RAM):
@@ -177,6 +180,21 @@ X modplay.xex myfile.mod
 
 **Default (if no argument given):**
 Loads `D1:MOD.DAT` from drive 1.
+
+**Pattern bank options:**
+- `--b` enables 130XE-style banked pattern mode (CPU+ANTIC) using 4 banks.
+  This gives a 64KB pattern window strategy and avoids long bank codes in CLI.
+- `--no-pattern-banks` disables banked pattern backend explicitly.
+
+If omitted, the default bank range is disabled (`0,0`). You can set build-time
+defaults for `modplay.xex` with:
+
+- `-DMODPLAY_DEFAULT_PATTERN_BANK_FIRST=<n>`
+- `-DMODPLAY_DEFAULT_PATTERN_BANK_COUNT=<n>`
+
+Auto profile for `--b` (no value) is configurable at build time:
+- `-DMODPLAY_AUTO_PATTERN_BANK_FIRST=<n>` (default `0`)
+- `-DMODPLAY_AUTO_PATTERN_BANK_COUNT=<n>` (default `4`)
 
 **Controls:**
 - `SPACE` – Pause / Resume
@@ -198,8 +216,10 @@ For very large MODs (>42KB samples), ADPCM compression is applied automatically,
 giving effective capacity of ~84KB of original 8-bit sample data.
 For more than that we start to downsample.
 
-For pattern data <= 16KB we store them in RAM - if there is space. 
-For pattern data > 16KB its stream from storage, which currently causes small glitches.
+For pattern data <= 16KB we store them in RAM - if there is space.
+For larger pattern data, the loader tries this order:
+1. Banked RAM (`--pattern-bank-range`, if configured and large enough)
+2. Disk streaming fallback
 
 ---
 
