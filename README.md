@@ -170,6 +170,8 @@ modplay.xex myfile.mod
 
 # Enable pattern banking (auto profile)
 modplay.xex --b myfile.mod
+modplay.xex --b 4 myfile.mod
+modplay.xex --b=4 myfile.mod
 ```
 
 ...or better (for more RAM):
@@ -182,8 +184,9 @@ X modplay.xex myfile.mod
 Loads `D1:MOD.DAT` from drive 1.
 
 **Pattern bank options:**
-- `--b` enables 130XE-style banked pattern mode (CPU+ANTIC) using 4 banks.
-  This gives a 64KB pattern window strategy and avoids long bank codes in CLI.
+- `--b` enables 130XE-style banked pattern mode (CPU+ANTIC) using auto bank count
+  (default 4 banks).
+- `--b <n>` or `--b=<n>` enables banking and uses exactly `<n>` banks.
 - `--no-pattern-banks` disables banked pattern backend explicitly.
 
 If omitted, the default bank range is disabled (`0,0`). You can set build-time
