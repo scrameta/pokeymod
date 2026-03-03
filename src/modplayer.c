@@ -325,7 +325,7 @@ static void stage_row(void)
                 uint16_t p = sn->period;
                 uint8_t  sn2 = note_sample ? note_sample : cs->sample_num;
                 if (sn2 != 0u && sn2 <= MOD_MAX_SAMPLES) {
-                    uint8_t ds_shift = SI_DS_SHIFT(&mod.samples[cs->sample_num]);
+                    uint8_t ds_shift = SI_DS_SHIFT(&mod.samples[sn2]);
                     if (ds_shift > 0u) {
                         uint32_t adj = (uint32_t)p << ds_shift;			
                         p = (adj > 0xFFFFUL) ? 0xFFFFu : (uint16_t)adj;
