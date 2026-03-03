@@ -633,7 +633,10 @@ uint8_t mod_load(const char *filename)
 
         for (j = 1u; j <= MOD_MAX_SAMPLES; j++) {
             SampleInfo *si = &mod.samples[j];
-            si->flags = 0u;   /* PCM, no loop, ds_shift=0, finetune=8 (bias for 0) */	    
+	    /* Preserve header-derived finetune (bits 7:4) and sample type/loop (bits 1:0).
+             * Pass 1 should only reset downsample planning (bits 3:2).
+             */
+            si->flags &= (uint8_t)~0x0Cu;
             if (si->length == 0u) continue;
             needed += (uint32_t)si->length;
         }
