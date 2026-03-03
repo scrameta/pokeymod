@@ -391,18 +391,36 @@ static uint8_t bank_fetch_pattern(uint8_t pattern_num, uint8_t *dst)
 {
 #if defined(__CC65__)
     uint32_t offset;
+    uint32_t offset_now;
     uint16_t bank_offset;
+    uint16_t chunk;
     uint8_t  bank_rel;
 
     offset = (uint32_t)pattern_num * (uint32_t)PAT_BYTES;
     if (offset + (uint32_t)PAT_BYTES > pattern_bank_cache_size) return 1;
 
-    bank_rel = (uint8_t)(offset >> 14);
-    if (bank_rel >= pattern_bank_count) return 1;
-    bank_offset = (uint16_t)(offset & (BANK_WINDOW_SIZE - 1u));
+    if (prefetch_bytes_done >= PAT_BYTES) return 0;
 
-    bank_copy_from_window(dst, bank_offset, bank_portb_for((uint8_t)(pattern_bank_first + bank_rel)));
-    return 0;
+    offset_now = offset + (uint32_t)prefetch_bytes_done;
+
+    chunk = (uint16_t)(PAT_BYTES - prefetch_bytes_done);
+    if (chunk > 256u) chunk = 256u;
+
+    bank_rel = (uint8_t)(offset_now >> 14);
+    if (bank_rel >= pattern_bank_count) return 1;
+    bank_offset = (uint16_t)(offset_now & (BANK_WINDOW_SIZE - 1u));
+
+    if ((uint32_t)bank_offset + (uint32_t)chunk > (uint32_t)BANK_WINDOW_SIZE) {
+        chunk = (uint16_t)(BANK_WINDOW_SIZE - bank_offset);
+    }
+
+    bank_copy_from_window(dst + prefetch_bytes_done,
+                          bank_offset,
+                          chunk,
+                          bank_portb_for((uint8_t)(pattern_bank_first + bank_rel)));
+    prefetch_bytes_done = (uint16_t)(prefetch_bytes_done + chunk);
+
+    return (prefetch_bytes_done >= PAT_BYTES) ? 0u : 2u;
 #else
     (void)pattern_num;
     (void)dst;
