@@ -290,7 +290,7 @@ static uint16_t read_be16(const uint8_t *p)
 #if defined(__CC65__)
 static uint8_t bank_portb_for(uint8_t bank)
 {
-    return (uint8_t)((PIA.portb & 0xF0u) | (bank & 0x0Fu));
+    return (uint8_t)((PIA.portb & 0xc3u) | (bank<<2));
 }
 #endif
 
