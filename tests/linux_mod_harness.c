@@ -27,11 +27,13 @@
 #include <inttypes.h>
 #include <assert.h>
 #include <stdarg.h>
+#include <stdbool.h>
 
 #include "modplayer.h"
 #include "pokeymax_hw.h"
 #include "adpcm.h"
 uint8_t pokeymax_irq_pending=0;
+//uint32_t POKEYMAX_RAM_SIZE=0;
 
 /* Legacy C handler retained in your tree; useful for desktop sim */
 void pokeymax_loop_handler(void);
@@ -65,9 +67,9 @@ typedef struct {
 
 static struct {
     uint8_t regs[0x10000];
-    uint8_t ram[POKEYMAX_RAM_SIZE];
+    uint8_t * ram;
 
-    uint16_t ram_addr_ptr;
+    uint32_t ram_addr_ptr;
     uint8_t chansel;
 
     MockChan ch[4];
@@ -88,7 +90,52 @@ static struct {
     uint32_t wav_data_bytes;
     uint8_t wav_header_written;
     int wav_gain;            /* linear gain multiplier for mixed sample */
+    int interp_linear;       /* 1=linear interpolation, 0=nearest */
+
+    /* Diagnostics */
+    int dump_placement;
+    int warn_fetch;
+    int warn_fetch_limit;         /* max warnings per channel */
+    uint32_t warn_fetch_count[4];
+    uint32_t warn_fetch_total;
 } g;
+
+static void diag_dump_sample_placement(void);
+static void diag_warn_fetch(MockChan *c, int ch_idx, uint32_t pos, uint32_t byte_addr, const char *why);
+static int  ranges_overlap_u32(uint32_t a0, uint32_t a1, uint32_t b0, uint32_t b1);
+
+/* ---------- Optional debug tracing / solo ---------- */
+typedef struct {
+    int enabled;
+    int solo_chan;               /* -1 = normal mix, 0..3 = solo */
+    int trace_all_frames;        /* 0 = only state changes, 1 = every frame */
+    FILE *csv_fp;                /* NULL = disabled */
+    const char *csv_path;
+} HarnessDebug;
+
+typedef struct {
+    uint8_t  valid;
+    uint8_t  configured;
+    uint8_t  dma_on;
+    uint8_t  irq_en;
+    uint8_t  is_adpcm;
+    uint8_t  is_8bit;
+    uint16_t addr;
+    uint16_t len_samples;
+    uint16_t period;
+    uint8_t  vol;
+    uint32_t play_pos_q16;
+    uint32_t samples_remaining_q8;
+} ChanDbgSnap;
+
+static HarnessDebug dbg = {
+    .enabled = 0,
+    .solo_chan = -1,
+    .trace_all_frames = 0,
+    .csv_fp = NULL,
+    .csv_path = NULL
+};
+static ChanDbgSnap dbg_prev[4];
 
 /* forward decls for shim macros in tests/linuxshim/pokeymax.h */
 uint8_t pokeymax_mock_peek(uint16_t addr);
@@ -136,6 +183,97 @@ static uint32_t period_to_samples_per_frame_q8(uint16_t hw_period, uint8_t is_ad
     if (spf_q8 == 0) spf_q8 = 1;
     return spf_q8;
 }
+
+
+static void dbg_csv_open(void) {
+    if (!dbg.csv_path) return;
+    dbg.csv_fp = fopen(dbg.csv_path, "w");
+    if (!dbg.csv_fp) {
+        fprintf(stderr, "warning: failed to open trace csv: %s\n", dbg.csv_path);
+        return;
+    }
+    fprintf(dbg.csv_fp,
+            "frame,chan,event,configured,dma,irq,mode,addr,len,period,vol,play_pos_q16,samples_remaining_q8,irqact,dma_reg,irqen_reg\n");
+    fflush(dbg.csv_fp);
+}
+
+static void dbg_csv_close(void) {
+    if (dbg.csv_fp) {
+        fclose(dbg.csv_fp);
+        dbg.csv_fp = NULL;
+    }
+}
+
+static void dbg_snapshot_chan(int i, ChanDbgSnap *s) {
+    MockChan *c = &g.ch[i];
+    memset(s, 0, sizeof(*s));
+    s->valid = 1;
+    s->configured = c->configured;
+    s->dma_on = c->dma_on;
+    s->irq_en = c->irq_en;
+    s->is_adpcm = c->is_adpcm;
+    s->is_8bit = c->is_8bit;
+    s->addr = c->addr;
+    s->len_samples = c->len_samples;
+    s->period = c->period;
+    s->vol = c->vol;
+    s->play_pos_q16 = c->play_pos_q16;
+    s->samples_remaining_q8 = c->samples_remaining_q8;
+}
+
+static const char *dbg_event_name(const ChanDbgSnap *a, const ChanDbgSnap *b) {
+    if (!a->valid) return "init";
+    if (b->addr != a->addr || b->len_samples != a->len_samples) return "retrigger";
+    if (b->period != a->period) return "period";
+    if (b->vol != a->vol) return "volume";
+    if (b->dma_on != a->dma_on) return b->dma_on ? "dma_on" : "dma_off";
+    if (b->irq_en != a->irq_en) return "irq_en";
+    if (b->configured != a->configured) return "config";
+    if (b->is_adpcm != a->is_adpcm || b->is_8bit != a->is_8bit) return "mode";
+    if (b->play_pos_q16 < a->play_pos_q16 && b->dma_on) return "loop_or_restart";
+    if (b->samples_remaining_q8 > a->samples_remaining_q8 && b->dma_on) return "reload";
+    return "state";
+}
+
+static void dbg_trace_frame(void) {
+    if (!dbg.csv_fp) return;
+
+    for (int i = 0; i < 4; i++) {
+        ChanDbgSnap now;
+        dbg_snapshot_chan(i, &now);
+
+        int changed = 0;
+        if (!dbg_prev[i].valid) {
+            changed = 1;
+        } else if (memcmp(&dbg_prev[i], &now, sizeof(now)) != 0) {
+            changed = 1;
+        }
+
+        if (dbg.trace_all_frames || changed) {
+            const char *ev = dbg_event_name(&dbg_prev[i], &now);
+            fprintf(dbg.csv_fp,
+                    "%" PRIu64 ",%d,%s,%u,%u,%u,%s%s,%u,%u,%u,%u,%" PRIu32 ",%" PRIu32 ",%02X,%02X,%02X\n",
+                    g.frame_no, i, ev,
+                    (unsigned)now.configured,
+                    (unsigned)now.dma_on,
+                    (unsigned)now.irq_en,
+                    now.is_adpcm ? "ADPCM" : "PCM",
+                    now.is_8bit ? "+8" : "",
+                    (unsigned)now.addr,
+                    (unsigned)now.len_samples,
+                    (unsigned)now.period,
+                    (unsigned)now.vol,
+                    now.play_pos_q16,
+                    now.samples_remaining_q8,
+                    (unsigned)(pokeymax_mock_peek(REG_IRQACT) & 0x0F),
+                    (unsigned)(pokeymax_mock_peek(REG_DMA) & 0x0F),
+                    (unsigned)(pokeymax_mock_peek(REG_IRQEN) & 0x0F));
+            dbg_prev[i] = now;
+        }
+    }
+    fflush(dbg.csv_fp);
+}
+
 
 static void mock_step_sample_engine_one_vbi(void) {
     /* Advance each active DMA channel; set IRQACT bits on end if IRQ enabled. */
@@ -336,13 +474,128 @@ static void wav_finish(void) {
     fclose(g.wav_fp);
     g.wav_fp = NULL;
 }
+
+static int ranges_overlap_u32(uint32_t a0, uint32_t a1, uint32_t b0, uint32_t b1) {
+    /* Half-open intervals [a0,a1), [b0,b1) */
+    return (a0 < b1) && (b0 < a1);
+}
+
+static void diag_dump_sample_placement(void) {
+    /* Uses final packed sample info from mod loader/player state. */
+    uint32_t max_end = 0;
+    int any = 0;
+
+    printf("=== Sample placement dump ===\n");
+    printf("RAM size compile-time POKEYMAX_RAM_SIZE=%u bytes\n", (unsigned)POKEYMAX_RAM_SIZE);
+    printf("Idx  Addr   End    LenSt  SrcLen LoopStart LoopLen Mode   DS Name\n");
+    printf("---- ------ ------ ------ ------ --------- ------- ------ -- ----------------------\n");
+
+    for (int i = 1; i <= MOD_MAX_SAMPLES; i++) {
+        const SampleInfo *s = &mod.samples[i];
+        if (s->length == 0 && s->pokeymax_len == 0) continue;
+        any = 1;
+
+        uint32_t addr = (uint32_t)s->pokeymax_addr;
+        uint32_t len_st = (uint32_t)s->pokeymax_len;
+        uint32_t end = addr + len_st; /* half-open */
+        if (end > max_end) max_end = end;
+
+        printf("%3d  %5u  %5u  %5u  %5u  %8u %7u %-6s %2u %s\n",
+               i,
+               (unsigned)addr,
+               (unsigned)(end ? (end - 1u) : addr),
+               (unsigned)len_st,
+               (unsigned)s->length,
+               (unsigned)s->loop_start,
+               (unsigned)s->loop_len,
+               s->is_adpcm ? "ADPCM" : "PCM",
+               (unsigned)(s->downsample_factor ? s->downsample_factor : 1u),
+               s->name);
+
+        if (len_st == 0) {
+            printf("  !! S%02d has zero stored length\n", i);
+        }
+        if (end > (uint32_t)POKEYMAX_RAM_SIZE) {
+            printf("  !! S%02d exceeds POKEYMAX_RAM_SIZE: addr=%u len=%u end=%u > %u\n",
+                   i, (unsigned)addr, (unsigned)len_st, (unsigned)end, (unsigned)POKEYMAX_RAM_SIZE);
+        }
+        if (end > 65536u) {
+            printf("  !! S%02d crosses 16-bit address space (0x10000): addr=%u len=%u end=%u\n",
+                   i, (unsigned)addr, (unsigned)len_st, (unsigned)end);
+        }
+        if (s->has_loop) {
+            uint32_t loop_end_src = (uint32_t)s->loop_start + (uint32_t)s->loop_len;
+            if (loop_end_src > (uint32_t)s->length) {
+                printf("  !! S%02d source loop exceeds source length: loop_end=%u > src_len=%u\n",
+                       i, (unsigned)loop_end_src, (unsigned)s->length);
+            }
+        }
+    }
+
+    if (!any) {
+        printf("(no samples)\n");
+    } else {
+        printf("Max stored RAM end (exclusive): %u\n", (unsigned)max_end);
+    }
+
+    /* Overlap scan on stored regions */
+    for (int i = 1; i <= MOD_MAX_SAMPLES; i++) {
+        const SampleInfo *a = &mod.samples[i];
+        uint32_t a0 = (uint32_t)a->pokeymax_addr;
+        uint32_t a1 = a0 + (uint32_t)a->pokeymax_len;
+        if (a->pokeymax_len == 0) continue;
+        for (int j = i + 1; j <= MOD_MAX_SAMPLES; j++) {
+            const SampleInfo *b = &mod.samples[j];
+            uint32_t b0 = (uint32_t)b->pokeymax_addr;
+            uint32_t b1 = b0 + (uint32_t)b->pokeymax_len;
+            if (b->pokeymax_len == 0) continue;
+            if (ranges_overlap_u32(a0, a1, b0, b1)) {
+                printf("  !! OVERLAP S%02d [%u..%u) with S%02d [%u..%u)\n",
+                       i, (unsigned)a0, (unsigned)a1, j, (unsigned)b0, (unsigned)b1);
+            }
+        }
+    }
+    printf("=== End placement dump ===\n");
+}
+
+static void diag_warn_fetch(MockChan *c, int ch_idx, uint32_t pos, uint32_t byte_addr, const char *why) {
+    if (!g.warn_fetch) return;
+    if (ch_idx < 0 || ch_idx >= 4) return;
+    if (g.warn_fetch_limit > 0 && g.warn_fetch_count[ch_idx] >= (uint32_t)g.warn_fetch_limit) return;
+
+    g.warn_fetch_count[ch_idx]++;
+    g.warn_fetch_total++;
+
+    fprintf(stderr,
+            "[WARN_FETCH F=%" PRIu64 " CH%d] %s addr=%u pos=%u byte_addr=%u len=%u per=%u vol=%u mode=%s%s dma=%u irq=%u play_pos_q16=%" PRIu32 "\n",
+            g.frame_no, ch_idx + 1, why,
+            (unsigned)c->addr,
+            (unsigned)pos,
+            (unsigned)byte_addr,
+            (unsigned)c->len_samples,
+            (unsigned)c->period,
+            (unsigned)c->vol,
+            c->is_adpcm ? "ADPCM" : "PCM",
+            c->is_8bit ? "+8" : "",
+            (unsigned)c->dma_on,
+            (unsigned)c->irq_en,
+            c->play_pos_q16);
+}
+
+
 static int8_t mock_fetch_pcm8(MockChan *c) {
     uint16_t pos = (uint16_t)(c->play_pos_q16 >> 16);
     if (pos >= c->len_samples) return 0;
 
     if (!c->is_adpcm) {
         uint32_t a = (uint32_t)c->addr + pos;
-        if (a >= POKEYMAX_RAM_SIZE) return 0;
+        if (a >= 65536u) {
+            diag_warn_fetch(c, (int)(c - &g.ch[0]), (uint32_t)pos, a, "PCM fetch crosses 16-bit address");
+        }
+        if (a >= POKEYMAX_RAM_SIZE) {
+            diag_warn_fetch(c, (int)(c - &g.ch[0]), (uint32_t)pos, a, "PCM fetch out of sample RAM");
+            return 0;
+        }
         return (int8_t)g.ram[a];
     }
 
@@ -351,7 +604,13 @@ static int8_t mock_fetch_pcm8(MockChan *c) {
         uint32_t byte_addr = (uint32_t)c->addr + (uint32_t)(sample_idx >> 1);
         uint8_t byte;
         uint8_t nibble;
-        if (byte_addr >= POKEYMAX_RAM_SIZE) return 0;
+        if (byte_addr >= 65536u) {
+            diag_warn_fetch(c, (int)(c - &g.ch[0]), (uint32_t)sample_idx, byte_addr, "ADPCM fetch crosses 16-bit address");
+        }
+        if (byte_addr >= POKEYMAX_RAM_SIZE) {
+            diag_warn_fetch(c, (int)(c - &g.ch[0]), (uint32_t)sample_idx, byte_addr, "ADPCM fetch out of sample RAM");
+            return 0;
+        }
 
         byte = g.ram[byte_addr];
         nibble = (uint8_t)((sample_idx & 1u) ? (byte & 0x0Fu) : ((byte >> 4) & 0x0Fu));
@@ -361,6 +620,8 @@ static int8_t mock_fetch_pcm8(MockChan *c) {
 
     return c->adpcm_last;
 }
+static int16_t mock_fetch_pcm8_linear_safe(const MockChan *c);
+
 static uint32_t period_to_samples_per_out_q16(uint16_t hw_period, uint32_t out_rate_hz) {
     const uint32_t clock_hz = 3546895u;
     if (hw_period == 0) hw_period = 1;
@@ -382,11 +643,18 @@ static void mock_render_audio_for_one_vbi(void) {
             c->irq_en = (g.regs[REG_IRQEN] & bit) ? 1u : 0u;
             if (!c->dma_on || !c->configured) continue;
 
-            int8_t s8 = mock_fetch_pcm8(c);
+            if (dbg.solo_chan >= 0 && i != dbg.solo_chan) {
+                /* still advance timing/state, but mute contribution */
+                /* (do not 'continue' here, to preserve loop/retrigger behavior) */
+            }
+
+            int16_t s8 = g.interp_linear ? mock_fetch_pcm8_linear_safe(c) : (int16_t)mock_fetch_pcm8(c);
 
             /* simple linear-ish volume scaling (0..64-ish) */
             int v = (int)(c->vol & 0x3Fu);
-            mix += ((int)s8 * v) / 32;
+            if (!(dbg.solo_chan >= 0 && i != dbg.solo_chan)) {
+                mix += ((int)s8 * v) / 32;
+            }
 
             /* advance source position (rough timing), but service end IRQs immediately */
             uint32_t inc_q16 = period_to_samples_per_out_q16(c->period ? c->period : 1u, g.wav_rate);
@@ -459,9 +727,62 @@ static void dump_pos(const char *tag) {
            (unsigned)pokeymax_mock_peek(REG_IRQEN));
 }
 
+/* Interpolated PCM fetch for WAV rendering only (does not affect player logic).
+ * Uses c->play_pos_q16 as source position in samples (16.16 fixed point).
+ * Assumes PCM8 path (same source format as mock_fetch_pcm8).
+ */
+static int8_t mock_fetch_pcm8_at_index(const MockChan *c, uint32_t idx) {
+    /* PCM8 only helper (no ADPCM decode path) */
+    uint32_t a = (uint32_t)c->addr + idx;
+    if (a >= POKEYMAX_RAM_SIZE) return 0;
+    return (int8_t)g.ram[a];
+}
+
+static int16_t mock_fetch_pcm8_linear_safe(const MockChan *c) {
+    if (!c->configured || !c->dma_on || c->len_samples == 0) return 0;
+    if (c->is_adpcm) {
+        /* Do not interpolate compressed source bytes */
+        return (int16_t)mock_fetch_pcm8((MockChan *)c);
+    }
+
+    uint32_t pos_q16 = c->play_pos_q16;
+    uint32_t idx = (pos_q16 >> 16);
+    uint32_t frac = pos_q16 & 0xFFFFu; /* 0..65535 */
+
+    uint32_t len = (uint32_t)c->len_samples;
+    if (len == 0) return 0;
+    if (idx >= len) {
+        /* Out of range due to stepping edge case: nearest fallback */
+        return (int16_t)mock_fetch_pcm8((MockChan *)c);
+    }
+
+    /* Boundary case: idx is last sample in current programmed block.
+     * The true "next" sample may be from a loop retrigger that hasn't been serviced yet,
+     * so interpolating here creates whistles. Use nearest instead.
+     */
+    if (idx + 1u >= len) {
+        return (int16_t)mock_fetch_pcm8((MockChan *)c);
+    }
+
+    /* If exactly on a sample point, skip interpolation math */
+    if (frac == 0u) {
+        return (int16_t)mock_fetch_pcm8_at_index(c, idx);
+    }
+
+    int32_t s0 = (int32_t)mock_fetch_pcm8_at_index(c, idx);
+    int32_t s1 = (int32_t)mock_fetch_pcm8_at_index(c, idx + 1u);
+
+    /* Linear interpolation in 16.16 fraction domain */
+    int32_t y = ((s0 * (int32_t)(65536u - frac)) + (s1 * (int32_t)frac)) >> 16;
+    if (y < -128) y = -128;
+    if (y >  127) y = 127;
+    return (int16_t)y;
+}
+
+
 static void usage(const char *argv0) {
     fprintf(stderr,
-            "Usage: %s <modfile> [--frames N] [--verbose] [--trace-boundary] [--no-loop-handler] [--wav out.wav] [--rate Hz] [--gain N]\n",
+            "Usage: %s <modfile> [--frames N] [--verbose] [--trace-boundary] [--no-loop-handler] [--wav out.wav] [--rate Hz] [--gain N] [--dump-placement] [--warn-fetch] [--warn-fetch-limit N]\n",
             argv0);
 }
 
@@ -470,14 +791,23 @@ int main(int argc, char **argv) {
     uint32_t max_frames = 5000;
     int use_c_loop_handler = 1;
     const char *wav_path = NULL;
+    double seconds_override = 0.0;
 
     memset(&g, 0, sizeof(g));
+    memset(dbg_prev, 0, sizeof(dbg_prev));
+    g.interp_linear = 1;      /* default to linear interpolation */
     g.regs[REG_SAMCFG] = 0xF0; /* reset default */
     g.wav_gain = 96;          /* decent starting point for 4x 8-bit mix */
+    g.dump_placement = 0;
+    g.warn_fetch = 0;
+    g.warn_fetch_limit = 8;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--frames") == 0 && i + 1 < argc) {
             max_frames = (uint32_t)strtoul(argv[++i], NULL, 0);
+        } else if (strcmp(argv[i], "--seconds") == 0 && i + 1 < argc) {
+            seconds_override = strtod(argv[++i], NULL);
+            if (seconds_override < 0.0) seconds_override = 0.0;
         } else if (strcmp(argv[i], "--verbose") == 0) {
             g.verbose = 1;
         } else if (strcmp(argv[i], "--trace-boundary") == 0) {
@@ -491,6 +821,33 @@ int main(int argc, char **argv) {
         } else if (strcmp(argv[i], "--gain") == 0 && i + 1 < argc) {
             g.wav_gain = (int)strtol(argv[++i], NULL, 0);
             if (g.wav_gain < 1) g.wav_gain = 1;
+        } else if (strcmp(argv[i], "--dump-placement") == 0) {
+            g.dump_placement = 1;
+        } else if (strcmp(argv[i], "--warn-fetch") == 0) {
+            g.warn_fetch = 1;
+        } else if (strcmp(argv[i], "--warn-fetch-limit") == 0 && i + 1 < argc) {
+            g.warn_fetch_limit = (int)strtol(argv[++i], NULL, 0);
+            if (g.warn_fetch_limit < 0) g.warn_fetch_limit = 0;
+        } else if (strcmp(argv[i], "--warn-fetch-limit") == 0) {
+            fprintf(stderr, "--warn-fetch-limit requires a value\n"); return 2;
+        } else if (strcmp(argv[i], "--solo") == 0 && i + 1 < argc) {
+            dbg.solo_chan = (int)strtol(argv[++i], NULL, 0);
+            if (dbg.solo_chan < 0 || dbg.solo_chan > 3) {
+                fprintf(stderr, "invalid --solo channel (expected 0..3)\n");
+                return 2;
+            }
+            dbg.enabled = 1;
+        } else if (strcmp(argv[i], "--interp-nearest") == 0) {
+            g.interp_linear = 0;
+            dbg.enabled = 1;
+        } else if (strcmp(argv[i], "--trace-csv") == 0 && i + 1 < argc) {
+            dbg.csv_path = argv[++i];
+            dbg.enabled = 1;
+        } else if (strcmp(argv[i], "--trace-all-frames") == 0) {
+            dbg.trace_all_frames = 1;
+            dbg.enabled = 1;
+//        } else if (strcmp(argv[i], "--ram-size") == 0 && i + 1 < argc) {
+//            POKEYMAX_RAM_SIZE = atol(argv[++i]);
         } else if (argv[i][0] == '-') {
             usage(argv[0]);
             return 2;
@@ -498,9 +855,14 @@ int main(int argc, char **argv) {
             modfile = argv[i];
         }
     }
+    g.ram = malloc(POKEYMAX_RAM_SIZE);
     if (!modfile) {
         usage(argv[0]);
         return 2;
+    }
+    if (seconds_override > 0.0) {
+        /* 50 VBI/sec */
+        max_frames = (uint32_t)(seconds_override * 50.0 + 0.5);
     }
 
     if (mod_load(modfile) != 0u) {
@@ -508,6 +870,10 @@ int main(int argc, char **argv) {
         return 1;
     }
     mod_play();
+
+    if (g.dump_placement) {
+        diag_dump_sample_placement();
+    }
 
     if (wav_path) {
         if (wav_begin(wav_path, g.wav_rate ? g.wav_rate : 44100u) != 0) {
@@ -518,6 +884,16 @@ int main(int argc, char **argv) {
         }
         printf("WAV output: %s @ %u Hz (gain=%d)\n", wav_path, (unsigned)g.wav_rate, g.wav_gain);
     }
+
+    if (dbg.csv_path) {
+        dbg_csv_open();
+        if (dbg.csv_fp) {
+            printf("CSV trace: %s%s\n", dbg.csv_path,
+                   dbg.trace_all_frames ? " (all frames)" : " (state changes)");
+        }
+    }
+    if (dbg.solo_chan >= 0) printf("Solo channel: %d\n", dbg.solo_chan);
+    if (g.wav_enabled) printf("Interpolation: %s\n", g.interp_linear ? "linear" : "nearest");
 
     g.use_c_loop_handler = use_c_loop_handler;
 
@@ -535,6 +911,10 @@ int main(int argc, char **argv) {
             /* Fast non-audio path: VBI-granularity hardware progress is good enough for tracing. */
             mock_step_sample_engine_one_vbi();
             mock_service_loop_irqs_if_needed();
+        }
+
+        if (dbg.csv_fp) {
+            dbg_trace_frame();
         }
 
         /* VBI tick (player logic) */
@@ -586,11 +966,16 @@ int main(int argc, char **argv) {
            (unsigned)pmdbg_irq_count_ch[0], (unsigned)pmdbg_irq_count_ch[1],
            (unsigned)pmdbg_irq_count_ch[2], (unsigned)pmdbg_irq_count_ch[3]);
 
+    if (g.warn_fetch) {
+        printf("warn_fetch_total=%u counts=[%u %u %u %u]\n", (unsigned)g.warn_fetch_total, (unsigned)g.warn_fetch_count[0], (unsigned)g.warn_fetch_count[1], (unsigned)g.warn_fetch_count[2], (unsigned)g.warn_fetch_count[3]);
+    }
+
     if (g.wav_enabled) {
         wav_finish();
         printf("wrote wav bytes=%u (%.2f sec)\n", (unsigned)g.wav_data_bytes,
                g.wav_rate ? (double)g.wav_data_bytes / (2.0 * (double)g.wav_rate) : 0.0);
     }
+    dbg_csv_close();
 
     mod_stop();
     mod_file_close();
