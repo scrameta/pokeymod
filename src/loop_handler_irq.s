@@ -16,13 +16,13 @@ REG_IRQACT  = $D292
 REG_VOL     = $D28F
 
 ; ChanState field offsets/stride (cc65 layout checked in loop_handler.c)
-CHAN_STRIDE       = 31
-CS_SAM_ADDR       = 18
-CS_LOOP_START     = 22
-CS_LOOP_LEN       = 24
-CS_HAS_LOOP       = 26
-CS_IS_ADPCM       = 27
-CS_ACTIVE         = 30
+CHAN_STRIDE       = 33
+CS_SAM_ADDR       = 20
+CS_LOOP_START     = 24
+CS_LOOP_LEN       = 26
+CS_HAS_LOOP       = 28
+CS_IS_ADPCM       = 29
+CS_ACTIVE         = 32
 
 ; temps (BSS, not reentrant-safe by design: IRQ path only)
 .segment "ZEROPAGE"

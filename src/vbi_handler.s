@@ -41,17 +41,15 @@ ZP_SAVE_LEN   = 26     ; save $82..$9B
 ; Saved vectors
 ;--------------------------------------------------------------
 .bss
-old_vbi_lo:   .res 1
-old_vbi_hi:   .res 1
-old_irq_lo:   .res 1
-old_irq_hi:   .res 1
+old_vbi:    .res 2      ; lo, hi — must be contiguous for JMP indirect
+old_irq:    .res 2      ; lo, hi — must be contiguous for JMP indirect
 zp_save_vbi:  .res ZP_SAVE_LEN   ; VBI zero page save area
 saved_sp:     .res 2
 
 ; Dedicated C stack while running the deferred VBI C tick.
 ; This prevents re-entrant use of the foreground's cc65 software stack,
 ; which otherwise causes memory corruption when NMI interrupts C code.
-VBI_CSTACK_SIZE = 160
+VBI_CSTACK_SIZE = 96
 vbi_cstack:    .res VBI_CSTACK_SIZE
 
 .code
@@ -62,15 +60,15 @@ vbi_cstack:    .res VBI_CSTACK_SIZE
 .proc _vbi_install
         ; Save current deferred VBI vector
         lda VVBLKD
-        sta old_vbi_lo
+        sta old_vbi
         lda VVBLKD+1
-        sta old_vbi_hi
+        sta old_vbi+1
 
         ; Save current IRQ vector
         lda VIMIRQ
-        sta old_irq_lo
+        sta old_irq
         lda VIMIRQ+1
-        sta old_irq_hi
+        sta old_irq+1
 
         ; Install deferred VBI via OS SETVBV (A=7, X=hi, Y=lo)
         ldy #<our_vbi          ; Y = low byte
@@ -94,16 +92,16 @@ vbi_cstack:    .res VBI_CSTACK_SIZE
 ;--------------------------------------------------------------
 .proc _vbi_remove
         ; Restore deferred VBI
-        ldy old_vbi_lo         ; Y = low byte
-        ldx old_vbi_hi         ; X = high byte
+        ldy old_vbi         ; Y = low byte
+        ldx old_vbi+1         ; X = high byte
         lda #7                 ; deferred VBI
         jsr SETVBV
 
         ; Restore IRQ
         sei
-        lda old_irq_lo
+        lda old_irq
         sta VIMIRQ
-        lda old_irq_hi
+        lda old_irq+1
         sta VIMIRQ+1
         cli
 
@@ -224,5 +222,5 @@ vbi_cstack:    .res VBI_CSTACK_SIZE
 @chain:
         pla                     ; restore A saved at entry
         nop
-        jmp (old_irq_lo)        ; chain to previous handler
+        jmp (old_irq)        ; chain to previous handler
 .endproc

@@ -37,18 +37,26 @@ typedef struct {
  * ------------------------------------------------------- */
 typedef struct {
     uint16_t length;         /* in bytes (decoded from words) */
-    int8_t   finetune;       /* -8..+7 */
     uint8_t  volume;         /* 0-64 */
     uint16_t loop_start;     /* byte offset */
     uint16_t loop_len;       /* in bytes; 0 or 2 = no loop */
-    uint8_t  has_loop;
     uint16_t pokeymax_addr;  /* address in PokeyMAX block RAM */
     uint16_t pokeymax_len;   /* actual length stored (may be ADPCM compressed) */
-    uint8_t  is_adpcm;       /* 1 if stored as ADPCM in PokeyMAX RAM */
-    uint8_t  is_8bit;        /* 1 if stored as 8-bit signed (default for small) */
-    uint8_t  downsample_factor; /* 1=none, 2=half-rate, 4=quarter-rate (skip bytes) */
-    char     name[MOD_SAMPLE_NAME_LEN + 1]; /* null-terminated for debug/UI */
+    uint8_t  flags;          /* see SI_* macros below */
 } SampleInfo;
+/* flags byte layout:
+ * bits 7:4  finetune bias (stored as finetune+8, range 0..15)
+ * bits 3:2  downsample shift (0=none, 1=half-rate, 2=quarter-rate)
+ * bits 1:0  sample type: 0=PCM, 1=PCM+loop, 2=ADPCM
+ */
+#define SI_STYPE_PCM       0x00
+#define SI_STYPE_PCM_LOOP  0x01
+#define SI_STYPE_ADPCM     0x02
+
+#define SI_HAS_LOOP(si)    (((si)->flags & 0x03) == SI_STYPE_PCM_LOOP)
+#define SI_IS_ADPCM(si)    (((si)->flags & 0x03) == SI_STYPE_ADPCM)
+#define SI_DS_SHIFT(si)    (((si)->flags >> 2) & 0x03)
+#define SI_FINETUNE(si)    ((int8_t)(((si)->flags >> 4) & 0x0F) - 8)
 
 /* -------------------------------------------------------
  * A single note in a pattern (4 bytes in MOD file)

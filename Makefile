@@ -11,15 +11,16 @@
 #   make clean       - remove all build artefacts
 
 TARGET  = atari
-CFLAGS  = -t $(TARGET) -Osir -Cl --include-dir include
+#CFLAGS  = -t $(TARGET) -Osir -Cl --include-dir include
+CFLAGS  = -t $(TARGET) -C cfg/atari.cfg -Osir -Cl --include-dir include
 ASFLAGS = -t $(TARGET)
 
 # --- Shared sources (used by player and tests) ---
 SHARED_C = src/pokeymax_hw.c src/adpcm.c src/tables.c
 
 # --- Main player ---
-PLAYER_C = src/main.c src/app_loader.c src/app_player.c src/app_player_core.c src/modplayer.c src/mod_loader.c src/bank.c \
-           src/loop_handler.c $(SHARED_C)
+PLAYER_C = src/main.c src/app_loader.c src/app_player.c src/app_player_core.c src/modplayer.c src/mod_loader.c src/bank.c src/chan_base.c \
+           $(SHARED_C)
 PLAYER_S = src/vbi_handler.s src/loop_handler_irq.s
 PLAYER_O = $(PLAYER_C:.c=.o) $(PLAYER_S:.s=.o)
 
@@ -32,10 +33,10 @@ TEST5_C  = tests/test5_vbi.c
 TEST6_C  = tests/test6_irq.c src/pokeymax_hw.c
 TEST7_C  = tests/test7_irq_during_vbi.c src/pokeymax_hw.c
 TEST8_C  = tests/test8_irq_during_foreground.c src/pokeymax_hw.c
-TEST9_C  = tests/test9_startup_path.c src/pokeymax_hw.c src/mod_loader.c src/modplayer.c src/tables.c src/adpcm.c src/loop_handler.c
-TEST9B_C = tests/test9b_startup_noirq.c src/pokeymax_hw.c src/mod_loader.c src/modplayer.c src/tables.c src/adpcm.c src/loop_handler.c
-TEST10_C = tests/test10_main_startup_markers.c src/pokeymax_hw.c src/mod_loader.c src/modplayer.c src/tables.c src/adpcm.c src/loop_handler.c
-TEST11_C = tests/test11_row0_decode.c src/pokeymax_hw.c src/mod_loader.c src/modplayer.c src/tables.c src/adpcm.c src/loop_handler.c
+TEST9_C  = tests/test9_startup_path.c src/pokeymax_hw.c src/mod_loader.c src/modplayer.c src/tables.c src/adpcm.c src/loop_handler.c src/chan_base.c src/bank.c
+TEST9B_C = tests/test9b_startup_noirq.c src/pokeymax_hw.c src/mod_loader.c src/modplayer.c src/tables.c src/adpcm.c src/loop_handler.c src/chan_base.c src/bank.c
+TEST10_C = tests/test10_main_startup_markers.c src/pokeymax_hw.c src/mod_loader.c src/modplayer.c src/tables.c src/adpcm.c src/loop_handler.c src/chan_base.c src/bank.c
+TEST11_C = tests/test11_row0_decode.c src/pokeymax_hw.c src/mod_loader.c src/modplayer.c src/tables.c src/adpcm.c src/loop_handler.c src/chan_base.c src/bank.c
 TEST56_S = src/vbi_handler.s
 TEST56_COMPAT_S = src/loop_handler_irq_compat.s
 

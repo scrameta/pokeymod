@@ -8,11 +8,6 @@ void app_player_vbi_tick(void)
     mod_vbi_tick();
 }
 
-uint8_t app_player_irq_handler(void)
-{
-    return mod_sample_irq_service();
-}
-
 uint8_t app_player_main_service(void)
 {
     if (mod_need_prefetch) {

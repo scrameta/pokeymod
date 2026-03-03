@@ -90,7 +90,6 @@ typedef struct {
     uint8_t  is_adpcm;
     uint8_t  downsample_factor;
     uint8_t  skipped;
-    char     sample_name[23];
 #endif
 } LoadProgressUI;
 
@@ -117,10 +116,8 @@ static void load_progress_begin_default(void *ctx, uint32_t source_total)
     ui->is_adpcm      = 0xFFu;
     ui->downsample_factor = 0xFFu;
     ui->skipped       = 0xFFu;
-    ui->sample_name[0]= 0;
 
     printf("Load 00/00   0%%\n");
-    printf("Name: %-22.22s\n", "");
     printf("Fmt:-----/- Len:00000 St:-------\n");
     printf("Src:%8lu/%8lu\n", 0UL, (unsigned long)source_total);
     printf("Dst:00000000/%8lu\n",(unsigned long)POKEYMAX_RAM_SIZE);
@@ -128,8 +125,7 @@ static void load_progress_begin_default(void *ctx, uint32_t source_total)
     fflush(stdout);
 #else
     (void)ui;
-    printf("\r[ 0/ 0] %-22.22s  %-5s  len:%5u  src:%9lu/%9lu  dst:%9lu  %-7s   ",
-           "",
+    printf("\r[ 0/ 0] %-5s  len:%5u  src:%9lu/%9lu  dst:%9lu  %-7s   ",
            "",
            0u,
            0UL,
@@ -151,10 +147,11 @@ static void load_progress_update_default(void *ctx,
 {
     LoadProgressUI *ui = (LoadProgressUI*)ctx;
 #if defined(__CC65__)
-    const char *name = si->name[0] ? si->name : "(unnamed)";
-    const char *fmt  = si->is_adpcm ? "ADPCM" : "PCM";
+    const char *fmt  = SI_IS_ADPCM(si) ? "ADPCM" : "PCM";
     const char *st   = skipped ? "SKIPPED" : "OK";
     uint8_t pct      = pct_u8(source_loaded, source_total);
+    uint8_t ds_shift = SI_DS_SHIFT(si);
+    uint8_t ds_factor = (uint8_t)(1u << ds_shift);  /* 1, 2, 4, or 8 */
 
     if (sample_index != ui->sample_index || total_samples != ui->total_samples) {
         gotoxy(5, ui->base_row);
@@ -168,51 +165,44 @@ static void load_progress_update_default(void *ctx,
         printf("%3u%%", (unsigned)pct);
     }
 
-    if (strncmp(name, ui->sample_name, 22u) != 0) {
-        gotoxy(6, ui->base_row + 1u);
-        printf("%-22.22s", name);
-        strncpy(ui->sample_name, name, 22u);
-        ui->sample_name[22] = 0;
-    }
-
-    if (si->is_adpcm != ui->is_adpcm) {
-        gotoxy(4, ui->base_row + 2u);
+    if (SI_IS_ADPCM(si) != ui->is_adpcm) {
+        gotoxy(4, ui->base_row + 1u);
         printf("%-5s", fmt);
-        ui->is_adpcm = si->is_adpcm;
+        ui->is_adpcm = SI_IS_ADPCM(si);
     }
 
-    if (si->downsample_factor != ui->downsample_factor) {
-        gotoxy(10, ui->base_row + 2u);
-        printf("%1d", si->downsample_factor);
-        ui->downsample_factor = si->downsample_factor;
+    if (ds_factor != ui->downsample_factor) {
+        gotoxy(10, ui->base_row + 1u);
+        printf("%1d", ds_factor);
+        ui->downsample_factor = ds_factor;
     }
 
     if (si->length != ui->sample_len) {
-        gotoxy(16, ui->base_row + 2u);
+        gotoxy(16, ui->base_row + 1u);
         printf("%5u", (unsigned)si->length);
         ui->sample_len = si->length;
     }
 
     if (skipped != ui->skipped) {
-        gotoxy(25, ui->base_row + 2u);
+        gotoxy(25, ui->base_row + 1u);
         printf("%-7s", st);
         ui->skipped = skipped;
     }
 
     if (source_loaded != ui->source_loaded) {
-        gotoxy(4, ui->base_row + 3u);
+        gotoxy(4, ui->base_row + 2u);
         printf("%8lu", (unsigned long)source_loaded);
         ui->source_loaded = source_loaded;
     }
 
     if (source_total != ui->source_total) {
-        gotoxy(13, ui->base_row + 3u);
+        gotoxy(13, ui->base_row + 2u);
         printf("%8lu", (unsigned long)source_total);
         ui->source_total = source_total;
     }
 
     if (stored_loaded != ui->stored_loaded) {
-        gotoxy(4, ui->base_row + 4u);
+        gotoxy(4, ui->base_row + 3u);
         printf("%8lu", (unsigned long)stored_loaded);
         ui->stored_loaded = stored_loaded;
     }
@@ -220,11 +210,10 @@ static void load_progress_update_default(void *ctx,
     fflush(stdout);
 #else
     (void)ui;
-    printf("\r[%2u/%2u] %-22.22s  %-5s  len:%5u  src:%9lu/%9lu  dst:%9lu  %-7s   ",
+    printf("\r[%2u/%2u] %-5s  len:%5u  src:%9lu/%9lu  dst:%9lu  %-7s   ",
            (unsigned)sample_index,
            (unsigned)total_samples,
-           si->name[0] ? si->name : "(unnamed)",
-           si->is_adpcm ? "ADPCM" : "PCM",
+           SI_IS_ADPCM(si) ? "ADPCM" : "PCM",
            (unsigned)si->length,
            (unsigned long)source_loaded,
            (unsigned long)source_total,
@@ -501,25 +490,21 @@ uint8_t mod_load(const char *filename)
     total_samples_to_load = 0;
     for (i = 1; i <= MOD_MAX_SAMPLES; i++) {
         SampleInfo *si = &mod.samples[i];
-        uint8_t j;
         if (fread(hdr_buf, 1, 30, mod_file) != 30) return 1;
-        for (j = 0; j < MOD_SAMPLE_NAME_LEN; j++) {
-            uint8_t c = hdr_buf[j];
-            if (c == 0u) break;
-            if (c < 32u || c > 126u) c = '.';
-            si->name[j] = (char)c;
-        }
-        while (j < MOD_SAMPLE_NAME_LEN) si->name[j++] = 0;
-        si->name[MOD_SAMPLE_NAME_LEN] = 0;
         si->length     = read_be16(hdr_buf + 22) * 2u;
-        si->finetune   = (int8_t)(hdr_buf[24] & 0x0Fu);
-        if (si->finetune > 7) si->finetune -= 16;
+        {
+            uint8_t ft_raw = hdr_buf[24] & 0x0Fu;  /* 0..15, where 8..15 = -8..-1 */
+            si->flags = (uint8_t)(ft_raw << 4);
+        }
         si->volume     = (hdr_buf[25] > 64u) ? 64u : hdr_buf[25];
         si->loop_start = read_be16(hdr_buf + 26) * 2u;
         si->loop_len   = read_be16(hdr_buf + 28) * 2u;
-        si->has_loop   = (si->loop_len > 2u) ? 1u : 0u;
-        if (si->has_loop && (si->loop_start + si->loop_len) > si->length)
-            si->loop_len = si->length - si->loop_start;
+        {
+            uint8_t has_loop = (si->loop_len > 2u) ? 1u : 0u;
+            if (has_loop && (si->loop_start + si->loop_len) > si->length)
+                si->loop_len = si->length - si->loop_start;
+            si->flags = (si->flags & 0xFCu) | (has_loop ? SI_STYPE_PCM_LOOP : SI_STYPE_PCM);
+        }	
         if (si->length > 0u) {
             total_sample_bytes += si->length;
             total_samples_to_load++;
@@ -607,12 +592,13 @@ uint8_t mod_load(const char *filename)
     }
 #endif
 
+    printf("Patterns:");
     if (s_fetch_pattern==ram_fetch_pattern)
-        printf("Using RAM for patterns\n");
+        printf("RAM\n");
     else if (s_fetch_pattern==bank_fetch_pattern)
-        printf("Using banked RAM for patterns\n");
+        printf("Banked RAM\n");
     else
-        printf("Streaming patterns of size %ld\n",pattern_data_size);
+        printf("Streaming\n");
 
     /* ------------------------------------------------------------------
      * PASS 1: Plan compression and downsampling from header data only.
@@ -647,9 +633,7 @@ uint8_t mod_load(const char *filename)
 
         for (j = 1u; j <= MOD_MAX_SAMPLES; j++) {
             SampleInfo *si = &mod.samples[j];
-            si->downsample_factor = 1u;
-            si->is_adpcm = 0u;
-            si->is_8bit  = 1u;
+            si->flags = 0u;   /* PCM, no loop, ds_shift=0, finetune=8 (bias for 0) */	    
             if (si->length == 0u) continue;
             needed += (uint32_t)si->length;
         }
@@ -659,12 +643,11 @@ uint8_t mod_load(const char *filename)
             for (j = 1u; j <= MOD_MAX_SAMPLES; j++) {
                 SampleInfo *si = &mod.samples[j];
                 if (si->length == 0u) continue;
-                if (si->length > 512u && !si->has_loop) {
+                if (si->length > 512u && !SI_HAS_LOOP(si)) {
                     uint32_t old_cost = (uint32_t)si->length;
                     uint32_t new_cost = ((uint32_t)si->length + 1u) / 2u;
                     needed = needed - old_cost + new_cost;
-                    si->is_adpcm = 1u;
-                    si->is_8bit  = 0u;
+                    si->flags = (si->flags & ~0x03u) | SI_STYPE_ADPCM;		    
                 }
             }
         }
@@ -698,8 +681,8 @@ uint8_t mod_load(const char *filename)
                 k = ncand;
                 while (k > 0u) {
                     SampleInfo *sk = &mod.samples[cand[k - 1u]];
-                    uint8_t sk_looped_pcm = (sk->has_loop && !sk->is_adpcm) ? 1u : 0u;
-                    uint8_t sj_looped_pcm = (sj->has_loop && !sj->is_adpcm) ? 1u : 0u;
+                    uint8_t sk_looped_pcm = (SI_HAS_LOOP(sk) && !SI_IS_ADPCM(sk)) ? 1u : 0u;
+                    uint8_t sj_looped_pcm = (SI_HAS_LOOP(sj) && !SI_IS_ADPCM(sj)) ? 1u : 0u;
                     uint8_t sk_wins = 0u;
                     if (sk_looped_pcm && !sj_looped_pcm) sk_wins = 1u;
                     else if (sk_looped_pcm == sj_looped_pcm && sk->length >= sj->length) sk_wins = 1u;
@@ -716,14 +699,17 @@ uint8_t mod_load(const char *filename)
                 for (c = 0u; c < ncand && needed > (uint32_t)POKEYMAX_RAM_SIZE; c++) {
                     SampleInfo *sc = &mod.samples[cand[c]];
                     uint8_t target_factor = (uint8_t)(pass == 1u ? 2u : pass == 2u ? 4u : 8u);
+                    uint8_t ds_shift = SI_DS_SHIFT(sc);
+                    uint8_t ds_factor = (uint8_t)(1u << ds_shift);  /* 1, 2, 4, or 8 */
 
-                    if (sc->downsample_factor >= target_factor) continue;
+                    if (ds_factor >= target_factor) continue;
 
                     {
-                        uint32_t ds_old = (uint32_t)sc->downsample_factor;
+                        uint32_t ds_old = (uint32_t)ds_factor;
                         uint32_t ds_new = (uint32_t)target_factor;
                         uint32_t old_cost, new_cost;
-                        if (sc->is_adpcm) {
+                        uint8_t ds_shift;
+                        if (SI_IS_ADPCM(sc)) {
                             old_cost = ((uint32_t)sc->length / ds_old + 1u) / 2u;
                             new_cost = ((uint32_t)sc->length / ds_new + 1u) / 2u;
                         } else {
@@ -731,7 +717,9 @@ uint8_t mod_load(const char *filename)
                             new_cost = (uint32_t)sc->length / ds_new;
                         }
                         needed = needed - old_cost + new_cost;
-                        sc->downsample_factor = target_factor;
+                        // target_factor is 2, 4, or 8 — convert to shift
+                        ds_shift = (target_factor == 2u) ? 1u : (target_factor == 4u) ? 2u : 3u;
+                        sc->flags = (sc->flags & ~0x0Cu) | (uint8_t)(ds_shift << 2);			
                     }
                 }
             }
@@ -764,15 +752,13 @@ uint8_t mod_load(const char *filename)
             uint8_t fi;
             SampleInfo *si = &mod.samples[j];
             if (si->length == 0u) continue;
-            fi = (si->downsample_factor == 8u) ? 3u :
-                         (si->downsample_factor == 4u) ? 2u :
-                         (si->downsample_factor == 2u) ? 1u : 0u;
-            if (si->is_adpcm) {
+            fi = SI_DS_SHIFT(si);
+            if (SI_IS_ADPCM(si)) {
                 na[fi]++;
-                abytes += ((uint32_t)si->length / (uint32_t)si->downsample_factor + 1u) / 2u;
+		abytes += ((uint32_t)(si->length >> fi) + 1u) / 2u;
             } else {
                 np[fi]++;
-                pbytes += (uint32_t)si->length / (uint32_t)si->downsample_factor;
+                pbytes += (uint32_t)si->length >> fi;
             }
         }
         printf("ADPCM/ 2:%u 4:%u 8:%u 16:%u =%lub\n",
@@ -809,6 +795,8 @@ uint8_t mod_load(const char *filename)
         SampleInfo *si = &mod.samples[i];
         uint16_t    ram_addr, ram_needed;
         uint16_t    remaining, chunk, written, out_len;
+        uint8_t ds_shift;
+        uint8_t ds_factor;
         ADPCMState  adpcm_state;
 
         if (si->length == 0u) continue;
@@ -823,11 +811,12 @@ uint8_t mod_load(const char *filename)
 
         /* Compression plan already set by Pass 1 (is_adpcm, is_8bit,
          * downsample_factor).  Just compute ram_needed from it. */
-        if (si->is_adpcm) {
-            ram_needed = (si->length / (uint16_t)si->downsample_factor + 1u) / 2u;
+        ds_shift = SI_DS_SHIFT(si);
+        ds_factor = (uint8_t)(1u << ds_shift);  /* 1, 2, 4, or 8 */
+        if (SI_IS_ADPCM(si)) {
+            ram_needed = ((si->length >> ds_shift) + 1u) / 2u;
         } else {
-            ram_needed = (si->length + (uint16_t)si->downsample_factor - 1u)
-                         / (uint16_t)si->downsample_factor;
+            ram_needed = (si->length + (uint16_t)((1u << ds_shift) - 1u)) >> ds_shift;
         }
 
         ram_addr = pokeymax_alloc(ram_needed);
@@ -853,10 +842,10 @@ uint8_t mod_load(const char *filename)
         si->pokeymax_len  = ram_needed;
 
         /* Adjust loop points for downsampled samples */
-        if (si->downsample_factor > 1u) {
-            si->loop_start = si->loop_start / si->downsample_factor;
-            si->loop_len   = si->loop_len   / si->downsample_factor;
-            if (si->loop_len < 2u && si->has_loop) si->loop_len = 2u;
+        if (ds_shift > 0u) {
+            si->loop_start >>= ds_shift;
+            si->loop_len   >>= ds_shift;
+            if (si->loop_len < 2u && SI_HAS_LOOP(si)) si->loop_len = 2u;
         }
 
         adpcm_state.predictor  = 0;
@@ -867,7 +856,7 @@ uint8_t mod_load(const char *filename)
         while (remaining > 0u) {
             chunk = (remaining > SECTOR_SIZE) ? SECTOR_SIZE : remaining;
             if (fread(sector_buf, 1, chunk, mod_file) != chunk) return 1;
-            if (si->is_adpcm) {
+            if (SI_IS_ADPCM(si)) {
                 /* Optionally downsample first, then ADPCM encode.
                  * adpcm_out (128B) holds the decimated PCM intermediate.
                  * enc_buf   (128B) holds the final ADPCM output.
@@ -875,9 +864,9 @@ uint8_t mod_load(const char *filename)
                 static uint8_t enc_buf[SECTOR_SIZE / 2];
                 const int8_t *src_ptr;
                 uint16_t      src_len;
-                if (si->downsample_factor > 1u) {
+                if (ds_factor > 1u) {
                     uint16_t k, di = 0u;
-                    uint8_t  factor = si->downsample_factor;
+                    uint8_t  factor = ds_factor;
                     for (k = 0u; k < chunk; k += factor)
                         adpcm_out[di++] = sector_buf[k];
                     src_ptr = (const int8_t*)adpcm_out;
@@ -890,10 +879,10 @@ uint8_t mod_load(const char *filename)
                                              enc_buf, &adpcm_state);
                 pokeymax_write_ram(ram_addr + written, enc_buf, out_len);
                 written += out_len;
-            } else if (si->downsample_factor > 1u) {
+            } else if (ds_factor > 1u) {
                 /* Downsample: pick every Nth byte into adpcm_out (reuse as temp buf) */
                 uint16_t k, out_idx = 0;
-                uint8_t  factor = si->downsample_factor;
+                uint8_t  factor = ds_factor;
                 for (k = 0u; k < chunk; k += factor) {
                     adpcm_out[out_idx++] = sector_buf[k];
                 }

@@ -500,7 +500,9 @@ static void diag_dump_sample_placement(void) {
         uint32_t end = addr + len_st; /* half-open */
         if (end > max_end) max_end = end;
 
-        printf("%3d  %5u  %5u  %5u  %5u  %8u %7u %-6s %2u %s\n",
+        uint8_t ds_shift = SI_DS_SHIFT(s);
+        uint8_t ds_factor = (uint8_t)(1u << ds_shift);  /* 1, 2, 4, or 8 */
+        printf("%3d  %5u  %5u  %5u  %5u  %8u %7u %-6s %2u\n",
                i,
                (unsigned)addr,
                (unsigned)(end ? (end - 1u) : addr),
@@ -508,9 +510,9 @@ static void diag_dump_sample_placement(void) {
                (unsigned)s->length,
                (unsigned)s->loop_start,
                (unsigned)s->loop_len,
-               s->is_adpcm ? "ADPCM" : "PCM",
-               (unsigned)(s->downsample_factor ? s->downsample_factor : 1u),
-               s->name);
+               SI_IS_ADPCM(s) ? "ADPCM" : "PCM",
+               (unsigned)(ds_factor ? ds_factor : 1u)
+               );
 
         if (len_st == 0) {
             printf("  !! S%02d has zero stored length\n", i);
@@ -523,7 +525,7 @@ static void diag_dump_sample_placement(void) {
             printf("  !! S%02d crosses 16-bit address space (0x10000): addr=%u len=%u end=%u\n",
                    i, (unsigned)addr, (unsigned)len_st, (unsigned)end);
         }
-        if (s->has_loop) {
+        if (SI_HAS_LOOP(s)) {
             uint32_t loop_end_src = (uint32_t)s->loop_start + (uint32_t)s->loop_len;
             if (loop_end_src > (uint32_t)s->length) {
                 printf("  !! S%02d source loop exceeds source length: loop_end=%u > src_len=%u\n",

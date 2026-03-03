@@ -71,6 +71,7 @@ typedef struct {
     uint8_t  sample_num;    /* 1-31, 0=none */
     uint16_t period;        /* current Amiga period */
     uint16_t target_period; /* for tone portamento */
+    uint16_t hw_period;     /* speed up */
     uint8_t  volume;        /* 0-64 */
     uint8_t  hw_vol;        /* scaled to 0-63 for PokeyMAX */
 
@@ -126,10 +127,6 @@ typedef struct {
     /* Timing */
     uint8_t  speed;                /* ticks per row */
     uint16_t bpm;
-    uint16_t vbi_accum;            /* fractional VBI accumulator (16.16 fixed pt) */
-    uint16_t vbi_per_tick_int;     /* integer VBIs per tick */
-    uint16_t vbi_per_tick_frac;    /* fractional part (256ths) */
-    uint8_t  vbi_frac_accum;       /* running fraction */
 
     /* Pattern break/jump */
     uint8_t  pattern_break;
