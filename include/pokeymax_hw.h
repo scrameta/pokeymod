@@ -34,7 +34,7 @@ void pokeymax_write_ram(uint16_t addr, const uint8_t *data, uint16_t len);
  * chan: 1-4
  * addr: address in PokeyMAX block RAM (bytes)
  * len:  sample length in samples
- * period: hw_period = 2 * amiga_period  (PokeyMAX clock = 2*PHI2, same as Paula clock)
+ * period: hw_period = amiga_period  (PokeyMAX clock = 2*PHI2, same as Paula clock)
  * vol: 0-63
  * Toggles DMA 0->1 to trigger immediately.
  */
