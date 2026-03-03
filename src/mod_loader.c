@@ -54,6 +54,37 @@ static uint32_t pattern_bank_cache_size = 0;
 #if defined(__CC65__)
 static uint8_t pattern_bank_first = 0u;
 static uint8_t pattern_bank_count = 0u;
+
+#pragma code-name(push, "LOWCODE")
+static void bank_copy_from_window(uint8_t *dst, uint16_t bank_offset, uint8_t bank_portb)
+{
+    uint8_t portb_saved = PIA.portb;
+    const uint8_t *src = (const uint8_t*)0x4000u + bank_offset;
+    uint8_t page;
+    uint8_t idx;
+
+    PIA.portb = bank_portb;
+    for (page = 0u; page < 4u; ++page) {
+        for (idx = 0u; idx != 0u; ++idx) {
+            *dst++ = *src++;
+        }
+    }
+    PIA.portb = portb_saved;
+}
+
+static void bank_copy_to_window(uint16_t bank_offset, const uint8_t *src, uint16_t len, uint8_t bank_portb)
+{
+    uint8_t portb_saved = PIA.portb;
+    uint8_t *dst = (uint8_t*)0x4000u + bank_offset;
+
+    PIA.portb = bank_portb;
+    while (len > 0u) {
+        *dst++ = *src++;
+        --len;
+    }
+    PIA.portb = portb_saved;
+}
+#pragma code-name(pop)
 #endif
 
 /* Minimal pluggable fetch backend (Step A): default = disk fetch) */
@@ -399,8 +430,6 @@ static uint8_t bank_fetch_pattern(uint8_t pattern_num, uint8_t *dst)
     uint32_t offset;
     uint16_t bank_offset;
     uint8_t  bank_rel;
-    uint8_t  portb_saved;
-    const uint8_t *src;
 
     offset = (uint32_t)pattern_num * (uint32_t)PAT_BYTES;
     if (offset + (uint32_t)PAT_BYTES > pattern_bank_cache_size) return 1;
@@ -409,13 +438,7 @@ static uint8_t bank_fetch_pattern(uint8_t pattern_num, uint8_t *dst)
     if (bank_rel >= pattern_bank_count) return 1;
     bank_offset = (uint16_t)(offset & (BANK_WINDOW_SIZE - 1u));
 
-    portb_saved = PIA.portb;
-    PIA.portb = bank_portb_for((uint8_t)(pattern_bank_first + bank_rel));
-
-    src = (const uint8_t*)0x4000u + bank_offset;
-    memcpy(dst, src, PAT_BYTES);
-
-    PIA.portb = portb_saved;
+    bank_copy_from_window(dst, bank_offset, bank_portb_for((uint8_t)(pattern_bank_first + bank_rel)));
     return 0;
 #else
     (void)pattern_num;
@@ -569,7 +592,6 @@ uint8_t mod_load(const char *filename)
         uint8_t required_banks = (uint8_t)((pattern_data_size + (BANK_WINDOW_SIZE - 1u)) >> 14);
         if (required_banks <= pattern_bank_count) {
             uint8_t bank_i;
-            uint8_t portb_saved = PIA.portb;
             uint32_t remaining = pattern_data_size;
             uint8_t bank_load_ok = 1u;
 
@@ -587,9 +609,12 @@ uint8_t mod_load(const char *filename)
                         break;
                     }
 
-                    PIA.portb = bank_portb_for((uint8_t)(pattern_bank_first + bank_i));
-                    memcpy((void*)(0x4000u + bank_off), sector_buf, chunk);
-                    PIA.portb = portb_saved;
+                    bank_copy_to_window(
+                        bank_off,
+                        sector_buf,
+                        chunk,
+                        bank_portb_for((uint8_t)(pattern_bank_first + bank_i))
+                    );
 
                     bank_off = (uint16_t)(bank_off + chunk);
                 }
@@ -597,8 +622,6 @@ uint8_t mod_load(const char *filename)
                 if (!bank_load_ok) break;
                 remaining -= (uint32_t)bank_bytes;
             }
-
-            PIA.portb = portb_saved;
 
             if (bank_load_ok) {
                 pattern_bank_cache_size = pattern_data_size;
