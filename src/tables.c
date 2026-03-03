@@ -48,17 +48,15 @@ const uint16_t finetune_ratio[16] = {
 /* Usage: adjusted = (base * finetune_ratio[ft+8]) >> 8 */
 
 /*
- * Vibrato sine table (64 entries, range 0-255 representing 0..1)
+ * Vibrato sine table (64 entries, signed range -128..127).
  * Used by vibrato effect (effect 4).
  */
-const uint8_t vibrato_sine[64] = {
-      0,  24,  49,  74,  97, 120, 141, 161,
-    180, 197, 212, 224, 235, 244, 250, 253,
-    255, 253, 250, 244, 235, 224, 212, 197,
-    180, 161, 141, 120,  97,  74,  49,  24,
-      0, 232, 207, 182, 159, 136, 115,  95,
-     76,  59,  44,  32,  21,  12,   6,   3,
-      1,   3,   6,  12,  21,  32,  44,  59,
-     76,  95, 115, 136, 159, 182, 207, 232
+const int8_t vibrato_sine[64] = {
+      0,  24,  49,  74,  97, 120,-115, -95,
+    -76, -59, -44, -32, -21, -12,  -6,  -3,
+     -1,  -3,  -6, -12, -21, -32, -44, -59,
+    -76, -95,-115, 120,  97,  74,  49,  24,
+      0, -24, -49, -74, -97,-120, 115,  95,
+     76,  95, 115,-120, -97, -74, -49, -24
 };
-/* Note: upper half is negative (used as signed: val - 128 if val > 128) */
+
