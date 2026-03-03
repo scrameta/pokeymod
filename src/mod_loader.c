@@ -23,6 +23,7 @@
 #if defined(__CC65__)
 #include <conio.h>
 #include <atari.h>
+#include "bank.h"
 #endif
 #include "mod_format.h"
 #include "modplayer.h"
@@ -34,9 +35,12 @@
 #define PATTERN_RAM_CACHE_THRESHOLD_BYTES (16u * 1024u)
 
 #define BANK_WINDOW_SIZE 0x4000u
+#define SECTOR_SIZE 256
 
+#pragma bss-name(push, "LOWBSS")
 static uint8_t pat_buf_a[PAT_BYTES];
 static uint8_t pat_buf_b[PAT_BYTES];
+#pragma bss-name(pop)
 
 static uint8_t *pat_current    = pat_buf_a;
 static uint8_t *pat_next       = pat_buf_b;
@@ -54,37 +58,6 @@ static uint32_t pattern_bank_cache_size = 0;
 #if defined(__CC65__)
 static uint8_t pattern_bank_first = 0u;
 static uint8_t pattern_bank_count = 0u;
-
-#pragma code-name(push, "LOWCODE")
-static void bank_copy_from_window(uint8_t *dst, uint16_t bank_offset, uint8_t bank_portb)
-{
-    uint8_t portb_saved = PIA.portb;
-    const uint8_t *src = (const uint8_t*)0x4000u + bank_offset;
-    uint8_t page;
-    uint8_t idx;
-
-    PIA.portb = bank_portb;
-    for (page = 0u; page < 4u; ++page) {
-        for (idx = 0u; idx != 0u; ++idx) {
-            *dst++ = *src++;
-        }
-    }
-    PIA.portb = portb_saved;
-}
-
-static void bank_copy_to_window(uint16_t bank_offset, const uint8_t *src, uint16_t len, uint8_t bank_portb)
-{
-    uint8_t portb_saved = PIA.portb;
-    uint8_t *dst = (uint8_t*)0x4000u + bank_offset;
-
-    PIA.portb = bank_portb;
-    while (len > 0u) {
-        *dst++ = *src++;
-        --len;
-    }
-    PIA.portb = portb_saved;
-}
-#pragma code-name(pop)
 #endif
 
 /* Minimal pluggable fetch backend (Step A): default = disk fetch) */
@@ -98,8 +71,9 @@ static PatternFetchFn s_fetch_pattern = disk_fetch_pattern;
 static uint8_t  prefetch_seek_done = 0;
 static uint16_t prefetch_bytes_done = 0;
 
-#define SECTOR_SIZE 256
+#pragma bss-name(push, "LOWBSS")
 static uint8_t sector_buf[SECTOR_SIZE];
+#pragma bss-name(pop)
 static uint8_t adpcm_out[SECTOR_SIZE / 2];
 
 uint8_t mod_row_buf[MOD_CHANNELS * 4];

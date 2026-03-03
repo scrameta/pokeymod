@@ -29,27 +29,17 @@ int main(int argc, char *argv[])
     int i;
 
     for (i = 1; i < argc; i++) {
-        if (strncmp(argv[i], "--b=", 4) == 0) {
-            unsigned long n = strtoul(argv[i] + 4, 0, 10);
+        if (strncmp(argv[i], "-B=", 3) == 0) {
+            unsigned long n = strtoul(argv[i] + 3, 0, 10);
             bank_first = (uint8_t)MODPLAY_AUTO_PATTERN_BANK_FIRST;
             bank_count = (uint8_t)n;
             continue;
         }
 
-        if (strcmp(argv[i], "--b") == 0) {
+        if (strcmp(argv[i], "-B") == 0) {
             bank_first = (uint8_t)MODPLAY_AUTO_PATTERN_BANK_FIRST;
             bank_count = (uint8_t)MODPLAY_AUTO_PATTERN_BANK_COUNT;
 
-            if ((i + 1) < argc && argv[i + 1][0] >= '0' && argv[i + 1][0] <= '9') {
-                unsigned long n = strtoul(argv[i + 1], 0, 10);
-                bank_count = (uint8_t)n;
-                i++;
-            }
-            continue;
-        }
-
-        if (strcmp(argv[i], "--no-pattern-banks") == 0) {
-            bank_count = 0u;
             continue;
         }
 

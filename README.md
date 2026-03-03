@@ -166,28 +166,22 @@ Copy `modplay.xex` to your Atari (via SIO2PC, AtariMax, etc.) or include in an A
 
 **Run from SpartaDOS X or MyDOS:**
 ```
-modplay.xex myfile.mod
-
-# Enable pattern banking (auto profile)
-modplay.xex --b myfile.mod
-modplay.xex --b 4 myfile.mod
-modplay.xex --b=4 myfile.mod
-```
-
-...or better (for more RAM):
-```
 X modplay.xex myfile.mod
-```
 
+# Enable pattern banking - 4 130XE banks
+X modplay.xex -B myfile.mod
+
+# Enable pattern banking - up to 16 banks in 00111100
+X modplay.xex -B=4 myfile.mod
+```
 
 **Default (if no argument given):**
 Loads `D1:MOD.DAT` from drive 1.
 
 **Pattern bank options:**
-- `--b` enables 130XE-style banked pattern mode (CPU+ANTIC) using auto bank count
+- `-B` enables 130XE-style banked pattern mode (CPU+ANTIC) using auto bank count
   (default 4 banks).
-- `--b <n>` or `--b=<n>` enables banking and uses exactly `<n>` banks.
-- `--no-pattern-banks` disables banked pattern backend explicitly.
+- `-B=<n>` enables banking and uses exactly `<n>` banks.
 
 If omitted, the default bank range is disabled (`0,0`). You can set build-time
 defaults for `modplay.xex` with:
