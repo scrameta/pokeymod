@@ -51,7 +51,7 @@ typedef struct {
     uint8_t  flags;          /* see SI_* macros below */
 } SampleInfo;
 /* flags byte layout:
- * bits 7:4  finetune bias (stored as finetune+8, range 0..15)
+ * bits 7:4  finetune (raw MOD nibble, 4-bit signed: 0..7 = 0..+7, 8..15 = -8..-1)
  * bits 3:2  downsample shift (0=none, 1=half-rate, 2=quarter-rate)
  * bits 1:0  sample type: 0=PCM, 1=PCM+loop, 2=ADPCM
  */
@@ -62,7 +62,10 @@ typedef struct {
 #define SI_HAS_LOOP(si)    (((si)->flags & 0x03) == SI_STYPE_PCM_LOOP)
 #define SI_IS_ADPCM(si)    (((si)->flags & 0x03) == SI_STYPE_ADPCM)
 #define SI_DS_SHIFT(si)    (((si)->flags >> 2) & 0x03)
-#define SI_FINETUNE(si)    ((int8_t)(((si)->flags >> 4) & 0x0F) - 8)
+/* MOD finetune nibble: 0=0, 1=+1 .. 7=+7, 8=-8, 9=-7 .. 15=-1 (4-bit signed) */
+#define SI_FINETUNE(si)    ((int8_t)((((si)->flags >> 4) & 0x0F) > 7 ? \
+                            (int8_t)(((si)->flags >> 4) & 0x0F) - 16 : \
+                            (int8_t)(((si)->flags >> 4) & 0x0F)))
 
 /* -------------------------------------------------------
  * A single note in a pattern (4 bytes in MOD file)

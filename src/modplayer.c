@@ -50,6 +50,7 @@
 extern const uint16_t amiga_periods[NUM_PERIODS];
 extern const uint16_t finetune_ratio[16];
 extern const int8_t   vibrato_sine[64];   /* OPT-4: must be signed */
+extern const uint16_t arp_semi_div[16];   /* arpeggio semitone divisors */
 
 static uint8_t master_volume = 63u;
 uint8_t mod_need_prefetch = 0;
@@ -567,9 +568,8 @@ static void update_effects(void)
                         case 2: offset = semi2; break;
                         default: break;
                     }
-                    if (offset > 0u) {
-                        uint16_t div = (uint16_t)(256u + (uint16_t)offset * 14u);
-                        base = (uint16_t)((uint32_t)base * 256UL / div);
+                    if (offset > 0u && offset < 16u) {
+                        base = (uint16_t)((uint32_t)base * 256UL / arp_semi_div[offset]);
                     }
                     /* Arpeggio bends transiently; use temp_hw_period, don't cache */
                     pokeymax_channel_set_period_vol(hw, temp_hw_period(cs, base), cs->hw_vol);
@@ -731,8 +731,6 @@ static void update_bpm_step(void)
         bpm_step = (uint16_t)((numer + (uint32_t)(denom >> 1u)) / denom);
     }
 #endif
-
-    bpm_accum = 0u;
 }
 
 /* -------------------------------------------------------
