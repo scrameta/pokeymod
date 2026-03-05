@@ -44,7 +44,7 @@
 #endif
 
 /* PokeyMAX core clock = 2*phi2 */
-#define POKEYMAX_CLOCK      (PAULA_CLOCK * 2UL)
+#define POKEYMAX_CLOCK      PAULA_CLOCK
 
 /*
  * Ticks per row = speed (set by Fx with x<32)

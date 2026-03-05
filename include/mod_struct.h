@@ -21,7 +21,7 @@
 #endif
 
 /* PokeyMAX core clock = 2*phi2 */
-#define POKEYMAX_CLOCK      (PAULA_CLOCK * 2UL)
+#define POKEYMAX_CLOCK      PAULA_CLOCK
 
 /* Default BPM and speed (ProTracker defaults) */
 #define DEFAULT_BPM         125
