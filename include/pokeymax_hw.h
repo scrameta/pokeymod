@@ -16,6 +16,8 @@ extern uint8_t pokeymax_samcfg_shadow;
 extern uint8_t pokeymax_dma_shadow;
 extern uint8_t pokeymax_irqen_shadow;
 
+/* Check we have the sample player */
+uint8_t pokeymax_detect(void);
 
 /* Initialise hardware, reset allocator, silence all channels */
 void pokeymax_init(void);

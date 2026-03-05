@@ -4,6 +4,7 @@
 #include <conio.h>
 
 #include "modplayer.h"
+#include "mod_struct.h"
 #include "mod_app.h"
 #include "pokeymax.h"
 
@@ -32,9 +33,9 @@ static void display_status(void)
 {
     gotoxy(0,22);
     printf("Ord:%3d/%3d Row:%2d BPM:%3d Spd:%d  ",
-           (int)(mod_get_order() + 1),
+           (int)(mod.order_pos + 1),
            (int)mod.song_length,
-           (int)mod_get_row(),
+           (int)mod.row,
            (int)mod.bpm,
            (int)mod.speed);
 }
@@ -44,6 +45,8 @@ void app_player_run(void)
     uint8_t key;
     uint8_t paused = 0;
 
+    printf("\nSPACE=pause  any key=stop\n\n");
+
     POKE(0x02FC, MOD_KEY_NONE);
 
     vbi_install();
@@ -52,7 +55,7 @@ void app_player_run(void)
     while (mod.playing || paused) {
         display_status();
 
-        (void)app_player_main_service();
+        //(void)app_player_main_service(); TODO - for some pattern functions we need to call something!
 
         key = key_read_clear();
         if (key != MOD_KEY_NONE) {
@@ -69,7 +72,7 @@ void app_player_run(void)
         wait_vbi();
     }
 
-    app_player_stop(1u);
+    app_player_stop();
     vbi_remove();
 
     printf("\nStopped.\n");

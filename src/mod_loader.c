@@ -1,75 +1,22 @@
 /*
  * mod_loader.c - MOD loader with double-buffered pattern cache
  *
- * Pattern RAM strategy (no VBI disk I/O):
- *
- *   Two 1KB pattern buffers. 'current' is what the VBI reads (memcpy only,
- *   no disk). 'next' is filled by the main loop between VBIs.
- *
- *   When the player advances to a new pattern, mod_pattern_advance() swaps
- *   the pointers and sets mod_need_prefetch=1. The main loop then calls
- *   mod_prefetch_next_pattern() which does the actual fseek+fread.
- *
- *   The 1050 disk drive takes ~100ms to seek + read 1KB. At 125BPM/speed6
- *   a pattern lasts ~7.5 seconds, so there is ample time.
- *
- *   Total pattern RAM: 2 x 1024 = 2KB. Works on stock 64KB 800XL.
  */
 
 #include <stdio.h>
 #include <string.h>
-#include <stdint.h>
-#include <stdlib.h>
-#if defined(__CC65__)
-#include <conio.h>
-#include <atari.h>
-#include "bank.h"
-#endif
 #include "mod_format.h"
-#include "modplayer.h"
+#include "mod_loader.h"
+#include "mod_struct.h"
 #include "pokeymax.h"
 #include "pokeymax_hw.h"
 #include "adpcm.h"
 
-#define PAT_BYTES   (MOD_ROWS_PER_PAT * MOD_CHANNELS * 4)   /* 1024 */
-#define PATTERN_RAM_CACHE_THRESHOLD_BYTES (16u * 1024u)
+// TODO remove all printf
 
-#define BANK_WINDOW_SIZE 0x4000u
 #define SECTOR_SIZE 256
 
-#pragma bss-name(push, "LOWBSS")
-static uint8_t pat_buf_a[PAT_BYTES];
-static uint8_t pat_buf_b[PAT_BYTES];
-#pragma bss-name(pop)
-
-static uint8_t *pat_current    = pat_buf_a;
-static uint8_t *pat_next       = pat_buf_b;
-static uint8_t  pat_current_num = 0xFF;
-static uint8_t  pat_next_num    = 0xFF;
-
-uint8_t mod_need_prefetch = 0;   /* main loop polls this */
-
 static FILE    *mod_file            = NULL;
-static uint32_t pattern_data_offset = 0;
-static uint8_t *pattern_ram_cache = NULL;
-static uint16_t pattern_ram_cache_size = 0;
-static uint32_t pattern_bank_cache_size = 0;
-
-#if defined(__CC65__)
-static uint8_t pattern_bank_first = 0u;
-static uint8_t pattern_bank_count = 0u;
-#endif
-
-/* Minimal pluggable fetch backend (Step A): default = disk fetch) */
-typedef uint8_t (*PatternFetchFn)(uint8_t pattern_num, uint8_t *dst);
-static uint8_t disk_fetch_pattern(uint8_t pattern_num, uint8_t *dst);
-static uint8_t ram_fetch_pattern(uint8_t pattern_num, uint8_t *dst);
-static uint8_t bank_fetch_pattern(uint8_t pattern_num, uint8_t *dst);
-static PatternFetchFn s_fetch_pattern = disk_fetch_pattern;
-
-/* Chunked prefetch state (256-byte slices to shorten SIO stalls) */
-static uint8_t  prefetch_seek_done = 0;
-static uint16_t prefetch_bytes_done = 0;
 
 #pragma bss-name(push, "LOWBSS")
 static uint8_t sector_buf[SECTOR_SIZE];
@@ -78,212 +25,17 @@ static uint8_t adpcm_out[SECTOR_SIZE / 2];
 
 uint8_t mod_row_buf[MOD_CHANNELS * 4];
 
-typedef struct {
-#if defined(__CC65__)
-    uint8_t  base_row;
-    uint16_t sample_index;
-    uint16_t total_samples;
-    uint16_t sample_len;
-    uint32_t source_loaded;
-    uint32_t source_total;
-    uint32_t stored_loaded;
-    uint8_t  is_adpcm;
-    uint8_t  downsample_factor;
-    uint8_t  skipped;
-#endif
-} LoadProgressUI;
 
-#if defined(__CC65__)
-static uint8_t pct_u8(uint32_t part, uint32_t total)
-{
-    if (total == 0u) return 100u;
-    if (part >= total) return 100u;
-    return (uint8_t)((part * 100u) / total);
-}
-#endif
-
-static void load_progress_begin_default(void *ctx, uint32_t source_total)
-{
-    LoadProgressUI *ui = (LoadProgressUI*)ctx;
-#if defined(__CC65__)
-    ui->base_row      = wherey();
-    ui->sample_index  = 0xFFFFu;
-    ui->total_samples = 0xFFFFu;
-    ui->sample_len    = 0xFFFFu;
-    ui->source_loaded = 0xFFFFFFFFUL;
-    ui->source_total  = 0xFFFFFFFFUL;
-    ui->stored_loaded = 0xFFFFFFFFUL;
-    ui->is_adpcm      = 0xFFu;
-    ui->downsample_factor = 0xFFu;
-    ui->skipped       = 0xFFu;
-
-    printf("Load 00/00   0%%\n");
-    printf("Fmt:-----/- Len:00000 St:-------\n");
-    printf("Src:%8lu/%8lu\n", 0UL, (unsigned long)source_total);
-    printf("Dst:00000000/%8lu\n",(unsigned long)POKEYMAX_RAM_SIZE);
-    ui->source_total = source_total;
-    fflush(stdout);
-#else
-    (void)ui;
-    printf("\r[ 0/ 0] %-5s  len:%5u  src:%9lu/%9lu  dst:%9lu  %-7s   ",
-           "",
-           0u,
-           0UL,
-           (unsigned long)source_total,
-           0UL,
-           "");
-    fflush(stdout);
-#endif
-}
-
-static void load_progress_update_default(void *ctx,
-                                         const SampleInfo *si,
-                                         uint16_t sample_index,
-                                         uint16_t total_samples,
-                                         uint32_t source_loaded,
-                                         uint32_t source_total,
-                                         uint32_t stored_loaded,
-                                         uint8_t skipped)
-{
-    LoadProgressUI *ui = (LoadProgressUI*)ctx;
-#if defined(__CC65__)
-    const char *fmt  = SI_IS_ADPCM(si) ? "ADPCM" : "PCM";
-    const char *st   = skipped ? "SKIPPED" : "OK";
-    uint8_t pct      = pct_u8(source_loaded, source_total);
-    uint8_t ds_shift = SI_DS_SHIFT(si);
-    uint8_t ds_factor = (uint8_t)(1u << ds_shift);  /* 1, 2, 4, or 8 */
-
-    if (sample_index != ui->sample_index || total_samples != ui->total_samples) {
-        gotoxy(5, ui->base_row);
-        printf("%2u/%2u", (unsigned)sample_index, (unsigned)total_samples);
-        ui->sample_index  = sample_index;
-        ui->total_samples = total_samples;
-    }
-
-    if (source_loaded != ui->source_loaded || source_total != ui->source_total) {
-        gotoxy(11, ui->base_row);
-        printf("%3u%%", (unsigned)pct);
-    }
-
-    if (SI_IS_ADPCM(si) != ui->is_adpcm) {
-        gotoxy(4, ui->base_row + 1u);
-        printf("%-5s", fmt);
-        ui->is_adpcm = SI_IS_ADPCM(si);
-    }
-
-    if (ds_factor != ui->downsample_factor) {
-        gotoxy(10, ui->base_row + 1u);
-        printf("%1d", ds_factor);
-        ui->downsample_factor = ds_factor;
-    }
-
-    if (si->length != ui->sample_len) {
-        gotoxy(16, ui->base_row + 1u);
-        printf("%5u", (unsigned)si->length);
-        ui->sample_len = si->length;
-    }
-
-    if (skipped != ui->skipped) {
-        gotoxy(25, ui->base_row + 1u);
-        printf("%-7s", st);
-        ui->skipped = skipped;
-    }
-
-    if (source_loaded != ui->source_loaded) {
-        gotoxy(4, ui->base_row + 2u);
-        printf("%8lu", (unsigned long)source_loaded);
-        ui->source_loaded = source_loaded;
-    }
-
-    if (source_total != ui->source_total) {
-        gotoxy(13, ui->base_row + 2u);
-        printf("%8lu", (unsigned long)source_total);
-        ui->source_total = source_total;
-    }
-
-    if (stored_loaded != ui->stored_loaded) {
-        gotoxy(4, ui->base_row + 3u);
-        printf("%8lu", (unsigned long)stored_loaded);
-        ui->stored_loaded = stored_loaded;
-    }
-
-    fflush(stdout);
-#else
-    (void)ui;
-    printf("\r[%2u/%2u] %-5s  len:%5u  src:%9lu/%9lu  dst:%9lu  %-7s   ",
-           (unsigned)sample_index,
-           (unsigned)total_samples,
-           SI_IS_ADPCM(si) ? "ADPCM" : "PCM",
-           (unsigned)si->length,
-           (unsigned long)source_loaded,
-           (unsigned long)source_total,
-           (unsigned long)stored_loaded,
-           skipped ? "SKIPPED" : "OK");
-    fflush(stdout);
-#endif
-}
-
-static void load_progress_end_default(void *ctx)
-{
-    LoadProgressUI *ui = (LoadProgressUI*)ctx;
-#if defined(__CC65__)
-    gotoxy(0, ui->base_row + 5u);
-#else
-    (void)ui;
-    printf("\n");
-#endif
-    fflush(stdout);
-}
-
-static LoadProgressUI s_default_progress_ctx;
-const ModLoadProgressPlugin mod_default_load_progress_plugin = {
-    load_progress_begin_default,
-    load_progress_update_default,
-    load_progress_end_default,
-    &s_default_progress_ctx
-};
-
-static const ModLoadProgressPlugin *s_progress_plugin = &mod_default_load_progress_plugin;
+static const ModLoadProgressPlugin *s_progress_plugin = 0;
 
 static uint16_t read_be16(const uint8_t *p)
 {
     return ((uint16_t)p[0] << 8) | p[1];
 }
 
-#if defined(__CC65__)
-static uint8_t bank_portb_for(uint8_t bank)
-{
-    return (uint8_t)((PIA.portb & 0xc3u) | (bank<<2));
-}
-#endif
-
 void mod_file_close(void)
 {
     if (mod_file) { fclose(mod_file); mod_file = NULL; }
-    if (pattern_ram_cache) {
-        free(pattern_ram_cache);
-        pattern_ram_cache = NULL;
-        pattern_ram_cache_size = 0;
-    }
-    pattern_bank_cache_size = 0;
-}
-
-void mod_set_pattern_fetch_fn(uint8_t (*fetch_fn)(uint8_t pattern_num, uint8_t *dst))
-{
-    s_fetch_pattern = fetch_fn ? fetch_fn : disk_fetch_pattern;
-    prefetch_seek_done = 0;
-    prefetch_bytes_done = 0;
-}
-
-void mod_set_pattern_bank_range(uint8_t first_bank, uint8_t bank_count)
-{
-#if defined(__CC65__)
-    pattern_bank_first = first_bank;
-    pattern_bank_count = bank_count;
-#else
-    (void)first_bank;
-    (void)bank_count;
-#endif
 }
 
 void mod_set_load_progress_plugin(const ModLoadProgressPlugin *plugin)
@@ -291,177 +43,6 @@ void mod_set_load_progress_plugin(const ModLoadProgressPlugin *plugin)
     s_progress_plugin = plugin;
 }
 
-/* -------------------------------------------------------
- * mod_read_row() - called from VBI, NO disk I/O
- * ------------------------------------------------------- */
-uint8_t mod_read_row(uint8_t pattern, uint8_t row)
-{
-    uint16_t offset = (uint16_t)row * (MOD_CHANNELS * 4u);
-
-    if (pattern == pat_current_num) {
-        memcpy(mod_row_buf, pat_current + offset, MOD_CHANNELS * 4);
-        return 0;
-    }
-    if (pattern == pat_next_num) {
-        memcpy(mod_row_buf, pat_next + offset, MOD_CHANNELS * 4);
-        return 0;
-    }
-    return 1;   /* not buffered - prefetch didn't complete in time */
-}
-
-uint8_t mod_get_row_ptr(uint8_t pattern, uint8_t row, const uint8_t **row_ptr)
-{
-    uint16_t offset = (uint16_t)row * (MOD_CHANNELS * 4u);
-
-    if (pattern == pat_current_num) {
-        *row_ptr = pat_current + offset;
-        return 0;
-    }
-    if (pattern == pat_next_num) {
-        *row_ptr = pat_next + offset;
-        return 0;
-    }
-
-    *row_ptr = 0;
-    return 1;
-}
-
-/* -------------------------------------------------------
- * mod_pattern_advance() - called from VBI when order advances
- * Flips buffers, requests next prefetch. NO disk I/O.
- * ------------------------------------------------------- */
-void mod_pattern_advance(uint8_t new_current, uint8_t prefetch_next)
-{
-    uint8_t *tmp;
-
-    if (new_current == pat_next_num) {
-        /* Swap: next becomes current */
-        tmp         = pat_current;
-        pat_current = pat_next;
-        pat_next    = tmp;
-        pat_current_num = new_current;
-        pat_next_num    = 0xFF;
-    }
-
-    if (prefetch_next != 0xFF && prefetch_next != pat_current_num) {
-        pat_next_num      = prefetch_next;
-        mod_need_prefetch = 1;
-    }
-}
-
-static uint8_t disk_fetch_pattern(uint8_t pattern_num, uint8_t *dst)
-{
-    uint32_t offset;
-    uint16_t chunk;
-
-    if (!mod_file) return 1;
-
-    if (!prefetch_seek_done) {
-        offset = pattern_data_offset + (uint32_t)pattern_num * (uint32_t)PAT_BYTES;
-        if (fseek(mod_file, (long)offset, SEEK_SET) != 0) return 1;
-        prefetch_seek_done = 1;
-        prefetch_bytes_done = 0;
-    }
-
-    if (prefetch_bytes_done >= PAT_BYTES) return 0;
-
-    chunk = (uint16_t)(PAT_BYTES - prefetch_bytes_done);
-    if (chunk > 256u) chunk = 256u;
-
-    if (fread(dst + prefetch_bytes_done, 1, chunk, mod_file) != chunk) return 1;
-    prefetch_bytes_done = (uint16_t)(prefetch_bytes_done + chunk);
-
-    return (prefetch_bytes_done >= PAT_BYTES) ? 0 : 2;
-}
-
-static uint8_t ram_fetch_pattern(uint8_t pattern_num, uint8_t *dst)
-{
-    uint32_t offset;
-
-    if (!pattern_ram_cache) return 1;
-
-    offset = (uint32_t)pattern_num * (uint32_t)PAT_BYTES;
-    if (offset + (uint32_t)PAT_BYTES > (uint32_t)pattern_ram_cache_size) return 1;
-
-    memcpy(dst, pattern_ram_cache + offset, PAT_BYTES);
-    return 0;
-}
-
-static uint8_t bank_fetch_pattern(uint8_t pattern_num, uint8_t *dst)
-{
-#if defined(__CC65__)
-    uint32_t offset;
-    uint32_t offset_now;
-    uint16_t bank_offset;
-    uint16_t chunk;
-    uint8_t  bank_rel;
-
-    offset = (uint32_t)pattern_num * (uint32_t)PAT_BYTES;
-    if (offset + (uint32_t)PAT_BYTES > pattern_bank_cache_size) return 1;
-
-    if (prefetch_bytes_done >= PAT_BYTES) return 0;
-
-    offset_now = offset + (uint32_t)prefetch_bytes_done;
-
-    chunk = (uint16_t)(PAT_BYTES - prefetch_bytes_done);
-    if (chunk > 256u) chunk = 256u;
-
-    bank_rel = (uint8_t)(offset_now >> 14);
-    if (bank_rel >= pattern_bank_count) return 1;
-    bank_offset = (uint16_t)(offset_now & (BANK_WINDOW_SIZE - 1u));
-
-    if ((uint32_t)bank_offset + (uint32_t)chunk > (uint32_t)BANK_WINDOW_SIZE) {
-        chunk = (uint16_t)(BANK_WINDOW_SIZE - bank_offset);
-    }
-
-    bank_copy_from_window(dst + prefetch_bytes_done,
-                          bank_offset,
-                          chunk,
-                          bank_portb_for((uint8_t)(pattern_bank_first + bank_rel)));
-    prefetch_bytes_done = (uint16_t)(prefetch_bytes_done + chunk);
-
-    return (prefetch_bytes_done >= PAT_BYTES) ? 0u : 2u;
-#else
-    (void)pattern_num;
-    (void)dst;
-    return 1;
-#endif
-}
-
-/* -------------------------------------------------------
- * mod_prefetch_next_pattern() - called from MAIN LOOP only
- * Reads pat_next_num from disk into pat_next buffer.
- * ------------------------------------------------------- */
-uint8_t mod_prefetch_next_pattern(void)
-{
-    uint8_t rc;
-
-    if (!mod_need_prefetch)   return 0;
-    if (pat_next_num == 0xFF) {
-        mod_need_prefetch = 0;
-        prefetch_seek_done = 0;
-        prefetch_bytes_done = 0;
-        return 0;
-    }
-
-    rc = s_fetch_pattern(pat_next_num, pat_next);
-    if (rc == 0u) {
-        mod_need_prefetch = 0;
-        prefetch_seek_done = 0;
-        prefetch_bytes_done = 0;
-        return 0;
-    }
-
-    if (rc == 2u) {
-        /* partial progress; keep mod_need_prefetch set */
-        return 0;
-    }
-
-    /* error: reset partial state so a later retry restarts cleanly */
-    prefetch_seek_done = 0;
-    prefetch_bytes_done = 0;
-    return 1;
-}
 
 /* -------------------------------------------------------
  * mod_load()
@@ -482,20 +63,10 @@ uint8_t mod_load(const char *filename)
     uint8_t  had_status_output;
 
     uint32_t sample_data_offset;
-    uint32_t pattern_data_size;
 
     memset(&mod, 0, sizeof(mod));
-    pat_current_num   = 0xFF;
-    pat_next_num      = 0xFF;
-    mod_need_prefetch = 0;
 
-    if (pattern_ram_cache) {
-        free(pattern_ram_cache);
-        pattern_ram_cache = NULL;
-        pattern_ram_cache_size = 0;
-    }
-    pattern_bank_cache_size = 0;
-    s_fetch_pattern = disk_fetch_pattern;
+    strncpy(mod.filename, filename, 64);
 
     if (mod_file) { fclose(mod_file); mod_file = NULL; }
     mod_file = fopen(filename, "rb");
@@ -542,81 +113,8 @@ uint8_t mod_load(const char *filename)
             mod.num_patterns = mod.order_table[i];
     mod.num_patterns++;
 
-    pattern_data_offset = (uint32_t)ftell(mod_file);
-    pattern_data_size = (uint32_t)mod.num_patterns * (uint32_t)PAT_BYTES;
-
-    if (pattern_data_size > 0u &&
-        pattern_data_size <= (uint32_t)PATTERN_RAM_CACHE_THRESHOLD_BYTES) {
-        pattern_ram_cache = (uint8_t*)malloc((size_t)pattern_data_size);
-        if (pattern_ram_cache) {
-            pattern_ram_cache_size = (uint16_t)pattern_data_size;
-            if (fread(pattern_ram_cache, 1u, (size_t)pattern_data_size, mod_file)
-                == (size_t)pattern_data_size) {
-                s_fetch_pattern = ram_fetch_pattern;
-            } else {
-                free(pattern_ram_cache);
-                pattern_ram_cache = NULL;
-                pattern_ram_cache_size = 0;
-                if (fseek(mod_file, (long)pattern_data_offset, SEEK_SET) != 0) return 1;
-            }
-        }
-    }
-
-#if defined(__CC65__)
-    if (s_fetch_pattern == disk_fetch_pattern &&
-        pattern_data_size > 0u &&
-        pattern_bank_count > 0u) {
-        uint8_t required_banks = (uint8_t)((pattern_data_size + (BANK_WINDOW_SIZE - 1u)) >> 14);
-        if (required_banks <= pattern_bank_count) {
-            uint8_t bank_i;
-            uint32_t remaining = pattern_data_size;
-            uint8_t bank_load_ok = 1u;
-
-            for (bank_i = 0u; bank_i < required_banks; bank_i++) {
-                uint16_t bank_bytes = (remaining > BANK_WINDOW_SIZE) ? BANK_WINDOW_SIZE : (uint16_t)remaining;
-                uint16_t bank_off = 0u;
-
-                while (bank_off < bank_bytes) {
-                    uint16_t chunk = (uint16_t)(bank_bytes - bank_off);
-                    if (chunk > SECTOR_SIZE) chunk = SECTOR_SIZE;
-
-                    /* Keep normal PORTB mapping during disk I/O (CIO/fread). */
-                    if (fread(sector_buf, 1u, chunk, mod_file) != chunk) {
-                        bank_load_ok = 0u;
-                        break;
-                    }
-
-                    bank_copy_to_window(
-                        bank_off,
-                        sector_buf,
-                        chunk,
-                        bank_portb_for((uint8_t)(pattern_bank_first + bank_i))
-                    );
-
-                    bank_off = (uint16_t)(bank_off + chunk);
-                }
-
-                if (!bank_load_ok) break;
-                remaining -= (uint32_t)bank_bytes;
-            }
-
-            if (bank_load_ok) {
-                pattern_bank_cache_size = pattern_data_size;
-                s_fetch_pattern = bank_fetch_pattern;
-            } else if (fseek(mod_file, (long)pattern_data_offset, SEEK_SET) != 0) {
-                return 1;
-            }
-        }
-    }
-#endif
-
-    printf("Patterns:");
-    if (s_fetch_pattern==ram_fetch_pattern)
-        printf("RAM\n");
-    else if (s_fetch_pattern==bank_fetch_pattern)
-        printf("Banked RAM\n");
-    else
-        printf("Streaming\n");
+    mod.pattern_data_offset = (uint32_t)ftell(mod_file);
+    mod.pattern_data_size = (uint32_t)mod.num_patterns * (uint32_t)PAT_BYTES;
 
     /* ------------------------------------------------------------------
      * PASS 1: Plan compression and downsampling from header data only.
@@ -800,8 +298,8 @@ uint8_t mod_load(const char *filename)
         }
     }
 
-    sample_data_offset = pattern_data_offset
-                       + pattern_data_size;
+    sample_data_offset = mod.pattern_data_offset
+                       + mod.pattern_data_size;
     if (fseek(mod_file, (long)sample_data_offset, SEEK_SET) != 0) return 1;
 
     pokeymax_init();
@@ -945,31 +443,6 @@ uint8_t mod_load(const char *filename)
     }
 
     if (mod_file) { fclose(mod_file); mod_file = NULL; }
-    mod_file = fopen(filename, "rb");
-
-    /* Pre-load pattern for order 0 into current buffer (blocking via fetch backend) */
-    {
-        uint8_t rc;
-        do {
-            rc = s_fetch_pattern(mod.order_table[0], pat_current);
-        } while (rc == 2u);
-        if (rc != 0u) return 1;
-        prefetch_seek_done = 0;
-        prefetch_bytes_done = 0;
-        pat_current_num = mod.order_table[0];
-    }
-
-    /* Pre-load pattern for order 1 into next buffer (blocking via fetch backend) */
-    if (mod.song_length > 1u) {
-        uint8_t rc;
-        do {
-            rc = s_fetch_pattern(mod.order_table[1], pat_next);
-        } while (rc == 2u);
-        if (rc != 0u) return 1;
-        prefetch_seek_done = 0;
-        prefetch_bytes_done = 0;
-        pat_next_num = mod.order_table[1];
-    }
 
     mod.order_pos     = 0;
     mod.row           = 0;

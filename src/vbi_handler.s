@@ -221,6 +221,5 @@ vbi_cstack:    .res VBI_CSTACK_SIZE
 
 @chain:
         pla                     ; restore A saved at entry
-        nop
         jmp (old_irq)        ; chain to previous handler
 .endproc

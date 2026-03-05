@@ -46,10 +46,6 @@
 /* PokeyMAX core clock = 2*phi2 */
 #define POKEYMAX_CLOCK      (PAULA_CLOCK * 2UL)
 
-/* Default BPM and speed (ProTracker defaults) */
-#define DEFAULT_BPM         125
-#define DEFAULT_SPEED       6
-
 /*
  * Ticks per row = speed (set by Fx with x<32)
  * Rows per beat = 4 (fixed in ProTracker)
@@ -64,121 +60,8 @@
  */
 
 /* -------------------------------------------------------
- * Channel state
- * ------------------------------------------------------- */
-typedef struct {
-    /* Current note */
-    uint8_t  sample_num;    /* 1-31, 0=none */
-    uint16_t period;        /* current Amiga period */
-    uint16_t target_period; /* for tone portamento */
-    uint16_t hw_period;     /* speed up */
-    uint8_t  volume;        /* 0-64 */
-    uint8_t  hw_vol;        /* scaled to 0-63 for PokeyMAX */
-
-    /* Effects */
-    uint8_t  effect;
-    uint8_t  param;
-
-    /* Vibrato */
-    uint8_t  vib_pos;       /* position 0-63 in sine table */
-    uint8_t  vib_speed;
-    uint8_t  vib_depth;
-
-    /* Arpeggio */
-    uint8_t  arp_tick;
-
-    /* Note cut/delay */
-    uint8_t  note_delay_ticks;
-    uint8_t  note_cut_tick;
-
-    /* Portamento */
-    uint8_t  port_speed;
-
-    /* Pattern loop */
-    uint8_t  loop_row;
-    uint8_t  loop_count;
-
-    /* Sample playback state */
-    uint16_t sam_addr;      /* address in PokeyMAX RAM */
-    uint16_t sam_len;       /* sample length in samples */
-    uint16_t loop_start;    /* loop start in samples */
-    uint16_t loop_len;      /* loop length in samples */
-    uint8_t  has_loop;
-    uint8_t  is_adpcm;
-    uint8_t  is_8bit;
-    uint8_t  triggered;     /* 1 if we just triggered a new note this row */
-    uint8_t  active;        /* 1 if channel has a sample loaded */
-} ChanState;
-
-/* -------------------------------------------------------
- * Player state
- * ------------------------------------------------------- */
-typedef struct {
-    /* Song data */
-    uint8_t  order_table[MOD_MAX_PATTERNS];
-    uint8_t  song_length;
-    uint8_t  num_patterns;
-
-    /* Playback position */
-    uint8_t  order_pos;            /* current position in order table */
-    uint8_t  row;                  /* current row 0-63 */
-    uint8_t  tick;                 /* current tick within row */
-
-    /* Timing */
-    uint8_t  speed;                /* ticks per row */
-    uint16_t bpm;
-
-    /* Pattern break/jump */
-    uint8_t  pattern_break;
-    uint8_t  break_row;
-    uint8_t  jump_order;
-    uint8_t  do_jump;
-
-    /* Pattern delay (EE effect) */
-    uint8_t  pattern_delay;
-    uint8_t  pattern_delay_count;
-
-    /* Channel states */
-    ChanState chan[MOD_CHANNELS];
-
-    /* Sample info (loaded at startup) */
-    SampleInfo samples[MOD_MAX_SAMPLES + 1];   /* 1-indexed */
-
-    /* Status */
-    uint8_t  playing;
-    uint8_t  loop_song;     /* restart at end if 1 */
-} ModPlayer;
-
-/* -------------------------------------------------------
- * Global player instance (single player)
- * ------------------------------------------------------- */
-extern ModPlayer mod;
-
-typedef struct {
-    void (*begin)(void *ctx, uint32_t source_total);
-    void (*update)(void *ctx,
-                   const SampleInfo *si,
-                   uint16_t sample_index,
-                   uint16_t total_samples,
-                   uint32_t source_loaded,
-                   uint32_t source_total,
-                   uint32_t stored_loaded,
-                   uint8_t skipped);
-    void (*end)(void *ctx);
-    void *ctx;
-} ModLoadProgressPlugin;
-
-/* -------------------------------------------------------
  * API
  * ------------------------------------------------------- */
-
-/*
- * mod_load()
- * Open a MOD file from disk, stream samples to PokeyMAX block RAM.
- * The file is kept open during playback for row-by-row pattern reads.
- * Returns 0 on success, non-zero on error.
- */
-uint8_t mod_load(const char *filename);
 
 /*
  * mod_read_row()
@@ -186,55 +69,7 @@ uint8_t mod_load(const char *filename);
  * Called by the player engine on each new row.
  */
 uint8_t mod_read_row(uint8_t pattern, uint8_t row);
-uint8_t mod_get_row_ptr(uint8_t pattern, uint8_t row, const uint8_t **row_ptr);
 extern uint8_t mod_row_buf[MOD_CHANNELS * 4];
-
-/*
- * mod_file_close()
- * Close the MOD file (call after playback ends).
- */
-void mod_file_close(void);
-
-/* Optional minimal hook to replace disk pattern fetch backend.
- * Pass NULL to restore default disk fetch implementation.
- */
-void mod_set_pattern_fetch_fn(uint8_t (*fetch_fn)(uint8_t pattern_num, uint8_t *dst));
-
-/* Optional: configure a bank-switched pattern source (Atari XL/XE).
- * Patterns are stored in a 16KB bank window selected through PIA PORTB.
- * first_bank = first bank number used by pattern storage.
- * bank_count = number of consecutive 16KB banks available (0 disables).
- */
-void mod_set_pattern_bank_range(uint8_t first_bank, uint8_t bank_count);
-
-/*
- * Load progress/status plugin for mod_load().
- * Pass NULL to disable plugin output entirely.
- */
-void mod_set_load_progress_plugin(const ModLoadProgressPlugin *plugin);
-extern const ModLoadProgressPlugin mod_default_load_progress_plugin;
-
-/*
- * mod_pattern_advance()
- * Called from VBI when order position changes. Swaps pattern buffers
- * and flags the main loop to prefetch the next pattern. No disk I/O.
- */
-void mod_pattern_advance(uint8_t new_current, uint8_t prefetch_next);
-
-/*
- * mod_prefetch_next_pattern()
- * Called from the MAIN LOOP (never from VBI). Reads the next pattern
- * from disk into the standby buffer. Call when mod_need_prefetch != 0.
- * Returns 0 on success.
- */
-uint8_t mod_prefetch_next_pattern(void);
-
-/*
- * mod_need_prefetch
- * Set by mod_pattern_advance() when a new pattern needs loading.
- * Cleared by mod_prefetch_next_pattern(). Polled by the main loop.
- */
-extern uint8_t mod_need_prefetch;
 
 /*
  * mod_play() / mod_stop() / mod_pause()
@@ -263,12 +98,5 @@ void mod_set_volume(uint8_t vol);
  * Returns 1 if a sample IRQ was pending and handled, 0 if not pending.
  */
 uint8_t mod_sample_irq_service(void);
-
-/*
- * mod_get_row() / mod_get_order()
- * Return current playback position for display.
- */
-uint8_t mod_get_row(void);
-uint8_t mod_get_order(void);
 
 #endif /* MODPLAYER_H */

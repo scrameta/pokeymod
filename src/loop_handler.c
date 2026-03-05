@@ -13,7 +13,7 @@
 #include <stddef.h>
 #include "pokeymax.h"
 #include "pokeymax_hw.h"
-#include "modplayer.h"
+#include "mod_struct.h"
 
 void pokeymax_loop_handler(void);
 void pokeymax_loop_irq_c(void);

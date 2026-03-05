@@ -29,6 +29,12 @@
 #include <stdarg.h>
 #include <stdbool.h>
 
+#include "mod_struct.h"
+#include "mod_pattern.h"
+#ifdef IO
+#include "mod_pattern_io.h"
+#endif
+#include "mod_loader.h"
 #include "modplayer.h"
 #include "pokeymax_hw.h"
 #include "adpcm.h"
@@ -722,7 +728,7 @@ static void mock_render_audio_for_one_vbi(void) {
 static void dump_pos(const char *tag) {
     printf("[%s] order=%u row=%u tick=%u playing=%u need_prefetch=%u IRQACT=%02X DMA=%02X IRQEN=%02X\n",
            tag,
-           (unsigned)mod_get_order(), (unsigned)mod_get_row(), (unsigned)mod.tick,
+           (unsigned)mod.order_pos, (unsigned)mod.row, (unsigned)mod.tick,
            (unsigned)mod.playing, (unsigned)mod_need_prefetch,
            (unsigned)pokeymax_mock_peek(REG_IRQACT),
            (unsigned)pokeymax_mock_peek(REG_DMA),
@@ -901,8 +907,8 @@ int main(int argc, char **argv) {
 
     dump_pos("start");
 
-    uint8_t prev_order = mod_get_order();
-    uint8_t prev_row = mod_get_row();
+    uint8_t prev_order = mod.order_pos;
+    uint8_t prev_row = mod.row;
     uint8_t prev_tick = mod.tick;
 
     for (g.frame_no = 0; g.frame_no < max_frames && mod.playing; g.frame_no++) {
@@ -924,38 +930,36 @@ int main(int argc, char **argv) {
         mod_vbi_tick();
 
         /* Main loop prefetch polling */
+#ifdef IO
         if (mod_need_prefetch) {
             if (g.trace_boundary) {
                 printf("[F=%" PRIu64 "] prefetch requested @ order=%u row=%u tick=%u\n",
-                       g.frame_no, (unsigned)mod_get_order(), (unsigned)mod_get_row(), (unsigned)mod.tick);
+                       g.frame_no, (unsigned)mod.order_pos, (unsigned)mod.row, (unsigned)mod.tick);
             }
-            if (mod_prefetch_next_pattern() != 0u) {
-                fprintf(stderr, "prefetch failed at frame=%" PRIu64 " order=%u row=%u\n",
-                        g.frame_no, (unsigned)mod_get_order(), (unsigned)mod_get_row());
-                break;
-            }
+            load_pattern();
             if (g.trace_boundary) {
                 printf("[F=%" PRIu64 "] prefetch complete\n", g.frame_no);
             }
         }
+#endif
 
-        if (mod_get_order() != prev_order || mod_get_row() != prev_row || mod.tick != prev_tick) {
+        if (mod.order_pos != prev_order || mod.row != prev_row || mod.tick != prev_tick) {
             if (g.trace_boundary) {
                 /* Emit detailed trace around row 60..2 boundary or on order change */
-                uint8_t r = mod_get_row();
-                if ((prev_row >= 60u) || (r <= 3u) || (mod_get_order() != prev_order)) {
+                uint8_t r = mod.row;
+                if ((prev_row >= 60u) || (r <= 3u) || (mod.order_pos != prev_order)) {
                     printf("[F=%" PRIu64 "] pos %u:%u:%u -> %u:%u:%u need_prefetch=%u IRQACT=%02X DMA=%02X IRQEN=%02X\n",
                            g.frame_no,
                            (unsigned)prev_order, (unsigned)prev_row, (unsigned)prev_tick,
-                           (unsigned)mod_get_order(), (unsigned)mod_get_row(), (unsigned)mod.tick,
+                           (unsigned)mod.order_pos, (unsigned)mod.row, (unsigned)mod.tick,
                            (unsigned)mod_need_prefetch,
                            (unsigned)pokeymax_mock_peek(REG_IRQACT),
                            (unsigned)pokeymax_mock_peek(REG_DMA),
                            (unsigned)pokeymax_mock_peek(REG_IRQEN));
                 }
             }
-            prev_order = mod_get_order();
-            prev_row = mod_get_row();
+            prev_order = mod.order_pos;
+            prev_row = mod.row;
             prev_tick = mod.tick;
         }
     }

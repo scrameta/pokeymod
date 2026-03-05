@@ -40,18 +40,19 @@
 
 #include <stdint.h>
 #include <string.h>
-#include "mod_format.h"
+//#include "mod_format.h"
+#include "mod_struct.h"
 #include "modplayer.h"
 #include "pokeymax.h"
 #include "pokeymax_hw.h"
-
-ModPlayer mod;
+#include "mod_pattern.h"
 
 extern const uint16_t amiga_periods[NUM_PERIODS];
 extern const uint16_t finetune_ratio[16];
 extern const int8_t   vibrato_sine[64];   /* OPT-4: must be signed */
 
 static uint8_t master_volume = 63u;
+uint8_t mod_need_prefetch = 0;
 
 /* -------------------------------------------------------
  * OPT-3: Row pre-decode staging
@@ -107,6 +108,7 @@ static uint8_t last_rtclock;
 #ifndef FX_VIBRATO_VOLSLIDE
 #define FX_VIBRATO_VOLSLIDE     0x6
 #endif
+
 
 /* -------------------------------------------------------
  * OPT-1: scale_volume
@@ -904,7 +906,7 @@ static void do_tick(void)
         }
 
         /* OPT-3: Pre-decode the row we just landed on, ready for next tick 0. */
-        if (mod.playing && !mod_need_prefetch) {
+        if (mod.playing) {
             stage_row();
         }
 	/* OPT-3: Pre-decode the row we just landed on, ready for next tick 0. */
@@ -969,6 +971,8 @@ void mod_play(void)
     POKE(REG_DMA,    0x00u);
     POKE(REG_IRQACT, 0x00u);
     POKE(REG_IRQEN,  0x00u);
+
+    mod_pattern_init(mod.order_table[0],mod.order_table[1]);
 }
 
 void mod_stop(void)
@@ -999,5 +1003,3 @@ void mod_pause(void)
 }
 
 void mod_set_volume(uint8_t vol) { master_volume = vol & 0x3Fu; }
-uint8_t mod_get_row(void)        { return mod.row; }
-uint8_t mod_get_order(void)      { return mod.order_pos; }

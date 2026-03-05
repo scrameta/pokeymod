@@ -30,6 +30,20 @@ uint8_t pokeymax_samcfg_shadow = 0xF0;
 uint8_t pokeymax_dma_shadow    = 0x00;
 uint8_t pokeymax_irqen_shadow  = 0x00;
 
+uint8_t pokeymax_detect(void)
+{
+    uint8_t cap;
+
+    if (PEEK(REG_CFGID) != 1u) return 0;
+
+    POKE(REG_CFGUNLOCK, 0x3F);
+    cap = PEEK(REG_CFG_CAP);
+    POKE(REG_CFGUNLOCK, 0x00);
+
+    if (!(cap & CAP_SAMPLE)) return 1;
+    return 2;
+}
+
 void pokeymax_init(void)
 {
     pokeymax_ram_ptr = 0;
