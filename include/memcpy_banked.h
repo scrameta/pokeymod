@@ -17,7 +17,12 @@
  * below $4000 in the linker config, so the code remains mapped regardless
  * of which extended RAM bank is active.
  */
-void __fastcall__ memcpy_banked(uint8_t *dst, uint8_t const *src,
+
+void 
+#ifdef __CC65__
+__fastcall__ 
+#endif
+memcpy_banked(uint8_t *dst, uint8_t const *src,
                                  uint16_t len,
                                  uint8_t new_portb,
                                  uint8_t restore_portb,
