@@ -37,10 +37,10 @@ void load_patterns_to_banks()
     mod.banks = mod.pattern_data_size>>12;
     if (mod.pattern_data_size&0x0fff) mod.banks+=1;   
 
-    /* Bank 0 uses fixed RAM at $3000-$3FFF for 48KiB machines.
+    /* Bank 0 uses reserved high RAM at $7C00-$8BFF.
        Remaining banks use the normal 4x4KiB $4000-$7FFF bank window. */
     mod.pattern_portb[0] = 0xFF;
-    mod.pattern_bank_addr[0] = (uint8_t *)0x3000;
+    mod.pattern_bank_addr[0] = (uint8_t *)0x7C00;
     for (i=1;i!=64;++i)
     {
         uint8_t j = (uint8_t)(i - 1u);

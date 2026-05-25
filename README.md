@@ -199,7 +199,7 @@ Order:   3 / 16   Row: 42/64   BPM: 125  Speed: 6
 ### 64KiB vs 48KiB status
 
 From the current code:
-- **48KiB support is implemented** by using fixed RAM at `$3000-$3FFF` as the first
+- **48KiB support is implemented** by using reserved high RAM at `$7C00-$8BFF` as the first
   4KiB pattern slice.
 - **64KiB/expanded support is also implemented** via the banked `$4000-$7FFF`
   pattern window for additional slices.
