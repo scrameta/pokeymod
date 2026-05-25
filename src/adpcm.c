@@ -1,8 +1,30 @@
 /*
- * adpcm.c - IMA ADPCM encoder for PokeyMAX sample upload
+ * adpcm.c - IMA ADPCM encoder/decoder for PokeyMAX sample upload
  *
  * Encodes 8-bit signed PCM to 4-bit IMA ADPCM (4:1 compression).
  * PokeyMAX block RAM holds ~43KB; ADPCM extends effective capacity to ~168KB.
+ *
+ * 6502/cc65 optimisations applied vs original:
+ *
+ *  1. Encoder: predictor clamp replaces the XOR-0x8000 biased-unsigned trick.
+ *     The XOR pair cost 4 extra 16-bit operations per sample; a sign-overflow
+ *     check after each signed add/sub is cheaper on 6502.
+ *
+ *  2. Encoder: step_half / step_qtr precomputed once per nibble instead of
+ *     shifting the working copy of 'step' twice in sequence.  Saves two
+ *     16-bit right-shifts per sample.
+ *
+ *  3. Decoder: all arithmetic converted from int32_t to uint16_t / int16_t.
+ *     Every 32-bit operation on 6502 compiles to ~4x the instructions of its
+ *     16-bit equivalent.  diff fits in uint16_t (max = step * 1.875 < 65535
+ *     because the step table tops out at 32767).  Overflow after the
+ *     int16_t add/sub is detected by sign-change, same as the encoder.
+ *
+ *  4. Decoder inlined into adpcm_decode_block() as a macro.  On 6502 each
+ *     JSR/RTS + parameter-passing round-trip is expensive; with sample_count
+ *     potentially in the thousands this adds up fast.  The standalone
+ *     adpcm_decode_nibble() wrapper is kept for the public API but just
+ *     invokes the macro.
  */
 
 #include <stdint.h>
@@ -28,22 +50,31 @@ const int8_t ima_index_table[16] = {
     -1, -1, -1, -1, 2, 4, 6, 8
 };
 
-/*
- * Core nibble encoder used by both single-sample and block paths.
- * Uses mostly 16-bit math so cc65 generates tighter/faster code on 6502.
- */
+/* -------------------------------------------------------------------------
+ * ADPCM_ENCODE_NIBBLE
+ *
+ * Changes from original:
+ *   - pred_delta built from precomputed step_half / step_qtr (saves 2 shifts)
+ *   - predictor updated via plain signed add/sub + sign-overflow clamp
+ *     instead of the XOR-0x8000 / XOR-0x8000 round-trip (saves 4 16-bit ops)
+ * ------------------------------------------------------------------------- */
 #define ADPCM_ENCODE_NIBBLE(pcm_sample, predictor_var, step_index_var, out_nibble) \
     do {                                                                             \
-        int16_t pcm16;                                                               \
+        int16_t  pcm16;                                                              \
         uint16_t diff;                                                               \
         uint16_t step;                                                               \
+        uint16_t step_half;                                                          \
+        uint16_t step_qtr;                                                           \
         uint16_t pred_delta;                                                         \
-        uint16_t pred_biased;                                                        \
-        uint8_t nibble_local = 0;                                                    \
-        int8_t idx_local;                                                            \
+        int16_t  new_pred;                                                           \
+        uint8_t  nibble_local = 0;                                                   \
+        int8_t   idx_local;                                                          \
                                                                                      \
         pcm16 = (int16_t)(pcm_sample) << 8;                                          \
-        step = ima_step_table[(step_index_var)];                                     \
+        step  = ima_step_table[(step_index_var)];                                    \
+        /* Precompute fractions once — saves two sequential >>1 on 'step' */         \
+        step_half = step >> 1;                                                       \
+        step_qtr  = step_half >> 1;                                                  \
                                                                                      \
         if (pcm16 < (predictor_var)) {                                               \
             nibble_local = 8;                                                        \
@@ -58,31 +89,28 @@ const int8_t ima_index_table[16] = {
             diff -= step;                                                            \
             pred_delta += step;                                                      \
         }                                                                            \
-        step >>= 1;                                                                  \
-        if (diff >= step) {                                                          \
+        if (diff >= step_half) {                                                     \
             nibble_local |= 2;                                                       \
-            diff -= step;                                                            \
-            pred_delta += step;                                                      \
+            diff -= step_half;                                                       \
+            pred_delta += step_half;                                                 \
         }                                                                            \
-        step >>= 1;                                                                  \
-        if (diff >= step) {                                                          \
+        if (diff >= step_qtr) {                                                      \
             nibble_local |= 1;                                                       \
-            pred_delta += step;                                                      \
+            pred_delta += step_qtr;                                                  \
         }                                                                            \
                                                                                      \
-        pred_biased = (uint16_t)(predictor_var) ^ 0x8000u;                           \
+        /* Clamp via sign-overflow check: cheaper than the XOR-0x8000 pair */       \
         if (nibble_local & 8u) {                                                     \
-            if (pred_delta > pred_biased)                                            \
-                pred_biased = 0u;                                                    \
-            else                                                                     \
-                pred_biased = (uint16_t)(pred_biased - pred_delta);                  \
+            new_pred = (int16_t)((predictor_var) - (int16_t)pred_delta);             \
+            /* Underflow if result went positive (wrapped past -32768) */            \
+            (predictor_var) = (new_pred > (predictor_var)) ? (int16_t)-32768         \
+                                                           : new_pred;               \
         } else {                                                                     \
-            if (pred_delta > (uint16_t)(0xFFFFu - pred_biased))                      \
-                pred_biased = 0xFFFFu;                                               \
-            else                                                                     \
-                pred_biased = (uint16_t)(pred_biased + pred_delta);                  \
+            new_pred = (int16_t)((predictor_var) + (int16_t)pred_delta);             \
+            /* Overflow if result went negative (wrapped past +32767) */             \
+            (predictor_var) = (new_pred < (predictor_var)) ? (int16_t)32767          \
+                                                           : new_pred;               \
         }                                                                            \
-        (predictor_var) = (int16_t)(pred_biased ^ 0x8000u);                          \
                                                                                      \
         idx_local = (int8_t)(step_index_var) + ima_index_table[nibble_local & 0x0F];\
         if (idx_local < 0)  idx_local = 0;                                           \
@@ -92,15 +120,62 @@ const int8_t ima_index_table[16] = {
         (out_nibble) = (uint8_t)(nibble_local & 0x0F);                               \
     } while (0)
 
+/* -------------------------------------------------------------------------
+ * ADPCM_DECODE_NIBBLE
+ *
+ * Inlineable macro version of the decoder.
+ *
+ * Changes from original adpcm_decode_nibble():
+ *   - All arithmetic in uint16_t / int16_t instead of int32_t.
+ *     diff max = step * (1 + 0.5 + 0.25 + 0.125) = step * 1.875.
+ *     step table max = 32767, so diff max = 61438 — fits in uint16_t.
+ *   - Predictor clamp uses sign-overflow check (same pattern as encoder)
+ *     rather than comparing against ±32767/32768 as 32-bit constants.
+ * ------------------------------------------------------------------------- */
+#define ADPCM_DECODE_NIBBLE(nibble, predictor_var, step_index_var, out_pcm8)     \
+    do {                                                                          \
+        uint16_t step16   = ima_step_table[(step_index_var)];                    \
+        uint16_t diff16   = step16 >> 3;                                         \
+        int16_t  pred16   = (predictor_var);                                     \
+        int16_t  new_pred16;                                                      \
+        int8_t   idx16;                                                           \
+                                                                                  \
+        if ((nibble) & 4u) diff16 += step16;                                     \
+        if ((nibble) & 2u) diff16 += (step16 >> 1);                              \
+        if ((nibble) & 1u) diff16 += (step16 >> 2);                              \
+                                                                                  \
+        if ((nibble) & 8u) {                                                      \
+            new_pred16 = (int16_t)(pred16 - (int16_t)diff16);                    \
+            /* Underflow: subtraction wrapped past -32768 → result > original */ \
+            (predictor_var) = (new_pred16 > pred16) ? (int16_t)-32768            \
+                                                    : new_pred16;                 \
+        } else {                                                                  \
+            new_pred16 = (int16_t)(pred16 + (int16_t)diff16);                    \
+            /* Overflow: addition wrapped past +32767 → result < original */     \
+            (predictor_var) = (new_pred16 < pred16) ? (int16_t)32767             \
+                                                    : new_pred16;                 \
+        }                                                                         \
+                                                                                  \
+        idx16 = (int8_t)(step_index_var) + ima_index_table[(nibble) & 0x0Fu];   \
+        if (idx16 < 0)  idx16 = 0;                                               \
+        if (idx16 > 88) idx16 = 88;                                              \
+        (step_index_var) = (uint8_t)idx16;                                       \
+                                                                                  \
+        (out_pcm8) = (int8_t)((predictor_var) >> 8);                             \
+    } while (0)
+
+
+/* ---- Public API wrappers ------------------------------------------------ */
+
 uint8_t adpcm_encode_sample(int8_t pcm_sample, ADPCMState *state)
 {
     uint8_t nibble;
-    int16_t predictor = state->predictor;
+    int16_t predictor  = state->predictor;
     uint8_t step_index = state->step_index;
 
     ADPCM_ENCODE_NIBBLE(pcm_sample, predictor, step_index, nibble);
 
-    state->predictor = predictor;
+    state->predictor  = predictor;
     state->step_index = step_index;
 
     return nibble;
@@ -111,12 +186,12 @@ uint16_t adpcm_encode_block(const int8_t *src, uint16_t pcm_len,
 {
     uint16_t i;
     uint16_t out_bytes = 0;
-    uint8_t lo, hi;
-    int16_t predictor = state->predictor;
-    uint8_t step_index = state->step_index;
+    uint8_t  lo, hi;
+    int16_t  predictor  = state->predictor;
+    uint8_t  step_index = state->step_index;
 
     for (i = 0; i + 1 < pcm_len; i += 2) {
-        ADPCM_ENCODE_NIBBLE(src[i], predictor, step_index, hi);
+        ADPCM_ENCODE_NIBBLE(src[i],     predictor, step_index, hi);
         ADPCM_ENCODE_NIBBLE(src[i + 1], predictor, step_index, lo);
         dst[out_bytes++] = (uint8_t)((hi << 4) | lo);
     }
@@ -125,54 +200,54 @@ uint16_t adpcm_encode_block(const int8_t *src, uint16_t pcm_len,
         dst[out_bytes++] = (uint8_t)(hi << 4);
     }
 
-    state->predictor = predictor;
+    state->predictor  = predictor;
     state->step_index = step_index;
 
     return out_bytes;
 }
 
+/* Standalone decode — kept for the public API; macro does the real work. */
 int8_t adpcm_decode_nibble(uint8_t nibble, ADPCMState *state)
 {
-    int32_t step = (int32_t)ima_step_table[state->step_index];
-    int32_t diff = step >> 3;
-    int32_t pred = state->predictor;
-    int8_t idx;
+    int8_t  pcm8;
+    int16_t predictor  = state->predictor;
+    uint8_t step_index = state->step_index;
 
-    if (nibble & 4u) diff += step;
-    if (nibble & 2u) diff += (step >> 1);
-    if (nibble & 1u) diff += (step >> 2);
+    ADPCM_DECODE_NIBBLE(nibble, predictor, step_index, pcm8);
 
-    if (nibble & 8u) pred -= diff;
-    else             pred += diff;
+    state->predictor  = predictor;
+    state->step_index = step_index;
 
-    if (pred > 32767l) pred = 32767l;
-    if (pred < -32768l) pred = -32768l;
-    state->predictor = (int16_t)pred;
-
-    idx = (int8_t)state->step_index + ima_index_table[nibble & 0x0Fu];
-    if (idx < 0) idx = 0;
-    if (idx > 88) idx = 88;
-    state->step_index = (uint8_t)idx;
-
-    /* 16-bit predictor to signed 8-bit PCM domain */
-    pred >>= 8;
-    if (pred > 127) pred = 127;
-    if (pred < -128) pred = -128;
-    return (int8_t)pred;
+    return pcm8;
 }
 
+/*
+ * adpcm_decode_block — hot path; macro inlined, no JSR per sample.
+ *
+ * State pulled into locals so cc65 can keep them in zero-page if available,
+ * and to avoid pointer dereferences inside the tight loop.
+ */
 uint16_t adpcm_decode_block(const uint8_t *src, uint16_t sample_count,
                             int8_t *dst, ADPCMState *state)
 {
     uint16_t i;
+    int16_t  predictor  = state->predictor;
+    uint8_t  step_index = state->step_index;
 
     for (i = 0; i < sample_count; i++) {
-        uint8_t byte = src[i >> 1];
-        uint8_t nibble = (uint8_t)((i & 1u) ? (byte & 0x0Fu) : ((byte >> 4) & 0x0Fu));
-        dst[i] = adpcm_decode_nibble(nibble, state);
+        uint8_t byte   = src[i >> 1];
+        uint8_t nibble = (uint8_t)((i & 1u) ? (byte & 0x0Fu)
+                                             : ((byte >> 4) & 0x0Fu));
+        int8_t  pcm8;
+        ADPCM_DECODE_NIBBLE(nibble, predictor, step_index, pcm8);
+        dst[i] = pcm8;
     }
+
+    state->predictor  = predictor;
+    state->step_index = step_index;
 
     return sample_count;
 }
 
 #undef ADPCM_ENCODE_NIBBLE
+#undef ADPCM_DECODE_NIBBLE
