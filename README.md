@@ -5,6 +5,8 @@ using the **PokeyMAX v1.31** sample player hardware (yet to be released).
 
 Written in **cc65 C** with a small 6502 assembly VBI/IRQ stub.
 
+Current architecture is split into a **loader stage** (`modload.xex`) and **player stage** (`modply.xex`), chained into `modplay.xex`.
+
 ---
 
 ## Hardware Requirements
@@ -12,17 +14,23 @@ Written in **cc65 C** with a small 6502 assembly VBI/IRQ stub.
 - Atari 800XL / 130XE (or compatible)
 - **PokeyMAX** installed with sample player support (`CAPABILITY` bit 5 = SAMPLE)
 - PAL or NTSC (automatically detected via `$D210` MODE register)
-- Recommended: 130XE (128KB) for loading large MOD files
+- 64KiB machines are supported (patterns can live in normal RAM and/or banked windows depending on mapping)
+- 130XE/expanded RAM is recommended for large pattern sets
 
 ---
 
 ## How It Works
 
-### Memory Map Used
+### Memory / Storage Strategy
 
 ```
-PokeyMAX block RAM: $0000–$A7FF (42KB = 43,008 bytes)
-  Divided between samples at load time (bump allocator).
+PokeyMAX block RAM: `$0000–$A7FF` (42KB = 43,008 bytes)
+  Used for sample payloads only (PCM / ADPCM / downsampled as needed).
+
+Pattern data: loaded into 4KiB slices (`mod.pattern_portb[]` + `mod.pattern_bank_addr[]`)
+and read row-by-row by the player via bank-aware copies when needed.
+
+Reserved address window: `$3000-$7FFF` is intentionally left out of cc65 main segments in loader/player linker configs so code/data/heap are not placed over pattern storage windows.
 
 PokeyMAX registers used:
   $D284–$D293  SAMPLE player (DMA, IRQ, period, volume, format)
@@ -168,30 +176,11 @@ Copy `modplay.xex` to your Atari (via SIO2PC, AtariMax, etc.) or include in an A
 ```
 X modplay.xex myfile.mod
 
-# Enable pattern banking - 4 130XE banks
-X modplay.xex -B myfile.mod
-
-# Enable pattern banking - up to 16 banks in 00111100
-X modplay.xex -B=4 myfile.mod
 ```
 
 **Default (if no argument given):**
 Loads `D1:MOD.DAT` from drive 1.
 
-**Pattern bank options:**
-- `-B` enables 130XE-style banked pattern mode (CPU+ANTIC) using auto bank count
-  (default 4 banks).
-- `-B=<n>` enables banking and uses exactly `<n>` banks.
-
-If omitted, the default bank range is disabled (`0,0`). You can set build-time
-defaults for `modplay.xex` with:
-
-- `-DMODPLAY_DEFAULT_PATTERN_BANK_FIRST=<n>`
-- `-DMODPLAY_DEFAULT_PATTERN_BANK_COUNT=<n>`
-
-Auto profile for `--b` (no value) is configurable at build time:
-- `-DMODPLAY_AUTO_PATTERN_BANK_FIRST=<n>` (default `0`)
-- `-DMODPLAY_AUTO_PATTERN_BANK_COUNT=<n>` (default `4`)
 
 **Controls:**
 - `SPACE` – Pause / Resume
@@ -206,6 +195,15 @@ Order:   3 / 16   Row: 42/64   BPM: 125  Speed: 6
 
 ## File Size Limits
 
+
+### 64KiB vs 48KiB status
+
+From the current code:
+- **48KiB support is implemented** by using fixed RAM at `$3000-$3FFF` as the first
+  4KiB pattern slice.
+- **64KiB/expanded support is also implemented** via the banked `$4000-$7FFF`
+  pattern window for additional slices.
+
 Sample data is streamed to PokeyMAX RAM during load and not kept in 6502 RAM,
 so sample data size is limited only by the 42KB PokeyMAX block RAM.
 
@@ -213,10 +211,9 @@ For very large MODs (>42KB samples), ADPCM compression is applied automatically,
 giving effective capacity of ~84KB of original 8-bit sample data.
 For more than that we start to downsample.
 
-For pattern data <= 16KB we store them in RAM - if there is space.
-For larger pattern data, the loader tries this order:
-1. Banked RAM (`--pattern-bank-range`, if configured and large enough)
-2. Disk streaming fallback
+Pattern data is currently loaded up-front into bank-addressable RAM windows in
+4KiB chunks. Row fetches are done from mapped RAM (direct read for main memory
+windows, banked copy for switched windows).
 
 ---
 
@@ -231,17 +228,20 @@ include/
   adpcm.h          IMA ADPCM encoder API
 
 src/
-  main.c           Default entry: loader stage then player stage
-  app_loader.c     Loader stage (hardware detect + MOD load + summaries)
+  loader_main.c     Loader entry (`modload.xex`)
+  player_main.c     Player entry (`modply.xex`)
+  all_main.c        Monolithic entry (`modplay2.xex`)
+  app_loader.c      Loader stage (hardware detect + MOD load + summaries)
   app_player_core.c Core embedding hooks (VBI/IRQ/main service, start/stop)
   app_player.c      Optional full interactive loop wrapper (status/keys/VBI install)
-  modplayer.c      MOD player tick engine, effects
-  mod_loader.c     MOD file parser + sample uploader
-  pokeymax_hw.c    PokeyMAX hardware driver
-  loop_handler.c   Sample-end IRQ loop handler
-  adpcm.c          IMA ADPCM encoder
-  tables.c         Amiga period table, vibrato sine table
-  vbi_handler.s    6502 ASM: VBI hook + IRQ chain
+  mod_loader.c      MOD file parser + sample uploader to PokeyMAX RAM
+  mod_pattern_bank_loader.c Pattern bulk loader into 4KiB banked slices
+  mod_pattern_bank.c Bank-aware row fetch helper for player core
+  modplayer.c       MOD player tick engine, effects
+  pokeymax_hw.c     PokeyMAX hardware driver
+  adpcm.c           IMA ADPCM encoder
+  tables.c          Amiga period table, vibrato sine table
+  vbi_handler.s     6502 ASM: VBI hook + IRQ chain
 ```
 
 ## Embedding in demo loaders
