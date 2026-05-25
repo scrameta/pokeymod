@@ -30,7 +30,7 @@ PokeyMAX block RAM: `$0000–$A7FF` (42KB = 43,008 bytes)
 Pattern data: loaded into 4KiB slices (`mod.pattern_portb[]` + `mod.pattern_bank_addr[]`)
 and read row-by-row by the player via bank-aware copies when needed.
 
-Reserved address window: `$3000-$7FFF` is intentionally left out of cc65 main segments in loader/player linker configs so code/data/heap are not placed over pattern storage windows.
+Linker configs now use `__RESERVED_MEMORY__` (default `$4000`) with a `$BC00` top boundary so the top 16KiB (`$7C00-$BC00`) stays out of general placement while avoiding a large mid-memory hole.
 
 PokeyMAX registers used:
   $D284–$D293  SAMPLE player (DMA, IRQ, period, volume, format)
