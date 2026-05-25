@@ -40,7 +40,7 @@ uint8_t app_player_main_service(void);
 
 /* Start/stop helpers for integrators managing their own VBI/IRQ/main loop. */
 void app_player_start(void);
-void app_player_stop(uint8_t close_file);
+void app_player_stop(void);
 
 /*
  * app_player_run()

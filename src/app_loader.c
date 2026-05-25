@@ -5,22 +5,11 @@
 
 #include "pokeymax.h"
 #include "pokeymax_hw.h"
-#include "modplayer.h"
 #include "mod_app.h"
-
-static uint8_t pokeymax_detect(void)
-{
-    uint8_t cap;
-
-    if (PEEK(REG_CFGID) != 1u) return 0;
-
-    POKE(REG_CFGUNLOCK, 0x3F);
-    cap = PEEK(REG_CFG_CAP);
-    POKE(REG_CFGUNLOCK, 0x00);
-
-    if (!(cap & CAP_SAMPLE)) return 1;
-    return 2;
-}
+#include "mod_struct.h"
+#include "mod_loader.h"
+#include "mod_default_progress_plugin.h"
+#include "cio_file.h"
 
 uint8_t app_loader_run(const char *filename, uint8_t show_progress_ui)
 {
@@ -43,14 +32,13 @@ uint8_t app_loader_run(const char *filename, uint8_t show_progress_ui)
     }
 
     printf("Loading: %s\n", filename);
-    if (mod_load(filename) != 0u) { printf("Load failed.\n"); return 1; }
+    if (mod_load(filename) != 0u) { printf("Load failed:%d.\n",cio_last_status); return 1; }
 
     printf("Orders:   %d\n", (int)mod.song_length);
     printf("Patterns: %d\n", (int)mod.num_patterns);
     printf("RAM used: %u / %u\n",
            (unsigned)pokeymax_ram_ptr,
            (unsigned)POKEYMAX_RAM_SIZE);
-    printf("\nSPACE=pause  any key=stop\n\n");
 
     return 0;
 }

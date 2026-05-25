@@ -13,7 +13,7 @@
 #include <stddef.h>
 #include "pokeymax.h"
 #include "pokeymax_hw.h"
-#include "modplayer.h"
+#include "mod_struct.h"
 
 #ifdef __CC65__
 typedef char _assert_chan_size    [(sizeof(ChanState)==33)                  ?1:-1];

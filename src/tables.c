@@ -40,10 +40,13 @@ const uint16_t amiga_periods[NUM_PERIODS] = {
  * Index 0 = finetune -8, index 15 = finetune +7
  */
 const uint16_t finetune_ratio[16] = {
-    /* -8     -7     -6     -5     -4     -3     -2     -1 */
-    0x0109, 0x0107, 0x0105, 0x0104, 0x0102, 0x0101, 0x0100, 0x0100,
+    /* Q8 multipliers: ratio = round(256 * 2^(ft/96))
+     * Negative finetune raises the period (lowers pitch).
+     * Positive finetune lowers the period (raises pitch).
+     *   -8     -7     -6     -5     -4     -3     -2     -1 */
+    0x010F, 0x010D, 0x010B, 0x0109, 0x0107, 0x0105, 0x0103, 0x0102,
     /* +0     +1     +2     +3     +4     +5     +6     +7 */
-    0x0100, 0x00FF, 0x00FE, 0x00FE, 0x00FD, 0x00FC, 0x00FA, 0x00F8
+    0x0100, 0x00FE, 0x00FD, 0x00FB, 0x00F9, 0x00F7, 0x00F5, 0x00F4
 };
 /* Usage: adjusted = (base * finetune_ratio[ft+8]) >> 8 */
 
@@ -57,6 +60,31 @@ const int8_t vibrato_sine[64] = {
      -1,  -3,  -6, -12, -21, -32, -44, -59,
     -76, -95,-115, 120,  97,  74,  49,  24,
       0, -24, -49, -74, -97,-120, 115,  95,
+     76,  59,  44,  32,  21,  12,   6,   3,
+      1,   3,   6,  12,  21,  32,  44,  59,
      76,  95, 115,-120, -97, -74, -49, -24
+};
+
+/*
+ * Arpeggio semitone divisor table (Q8 fixed point).
+ * arp_semi_div[n] = round(256 * 2^(n/12))
+ * To get the period n semitones up: period * 256 / arp_semi_div[n]
+ * Index 0 unused (no shift), 1..15 cover the full arpeggio range.
+ */
+const uint16_t arp_semi_div[16] = {
+    256, 271, 287, 304, 323, 342, 362, 384,
+    406, 431, 456, 483, 512, 542, 575, 608
+};
+
+/*
+ * OPT-7: Arpeggio reciprocal table — replaces 32-bit divide.
+ * arp_semi_recip[n] = round(65536 / arp_semi_div[n])
+ * Usage: period_shifted = (uint16_t)((uint16_t)period * (uint16_t)recip >> 8)
+ * Index 0 unused (no shift), values 1..15 fit uint8_t (108..242).
+ * Max error < 1.7% vs exact integer divide — inaudible on 8-bit HW.
+ */
+const uint8_t arp_semi_recip[16] = {
+    0x00, 0xF2, 0xE4, 0xD8, 0xCB, 0xC0, 0xB5, 0xAB,
+    0xA1, 0x98, 0x90, 0x88, 0x80, 0x79, 0x72, 0x6C
 };
 

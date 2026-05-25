@@ -16,6 +16,8 @@ extern uint8_t pokeymax_samcfg_shadow;
 extern uint8_t pokeymax_dma_shadow;
 extern uint8_t pokeymax_irqen_shadow;
 
+/* Check we have the sample player */
+uint8_t pokeymax_detect(void);
 
 /* Initialise hardware, reset allocator, silence all channels */
 void pokeymax_init(void);
@@ -46,7 +48,8 @@ void pokeymax_channel_setup(uint8_t chan, uint16_t addr, uint16_t len,
  * Retrigger a channel with new addr/len (used by loop handler).
  * Toggles DMA 1->0->1. Keeps current period and volume.
  */
-void pokeymax_channel_trigger(uint8_t chan, uint16_t addr, uint16_t len);
+/* Pre-load addr/len for next hardware auto-reload (no DMA restart) */
+void pokeymax_channel_preload(uint8_t chan, uint16_t addr, uint16_t len);
 
 /* Update period + volume without restarting (safe mid-playback) */
 void pokeymax_channel_set_period_vol(uint8_t chan, uint16_t period, uint8_t vol);
