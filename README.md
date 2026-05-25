@@ -1,7 +1,7 @@
 # PokeyMAX MOD Player
 
 A ProTracker 4-channel `.MOD` player for the Atari 8-bit family (800XL/XE),
-using the **PokeyMAX v1.26** sample player hardware.
+using the **PokeyMAX v1.31** sample player hardware (yet to be released).
 
 Written in **cc65 C** with a small 6502 assembly VBI/IRQ stub.
 
