@@ -1,7 +1,7 @@
 gcc -std=c99 -O0 -g -Wall -Wextra \
   -Itests/linuxshim -Iinclude \
-  -DIO \
-  -o tests/linux_mod_harness_io \
+  -DBANK \
+  -o tests/linux_mod_harness_bank \
   tests/linux_mod_harness.c tests/linuxshim/cio_file.c \
   src/modplayer.c src/mod_loader.c src/pokeymax_hw.c src/loop_handler.c \
-  src/adpcm.c src/tables.c src/mod.c src/mod_pattern_io.c -m
+  src/adpcm.c src/tables.c src/mod.c src/mod_pattern_bank.c src/mod_pattern_bank_loader.c tests/linuxshim/memcpy_banked.c -lm
