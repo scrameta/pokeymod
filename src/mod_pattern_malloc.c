@@ -36,14 +36,15 @@ void mod_pattern_init(uint8_t new_current, uint8_t prefetch_next)
 {
 	if (!pattern_buf)
 	{
+		uint8_t f_ok = 0;
 #ifdef PATTERN_DEBUG
 		printf("Reading pattern data from disk. %s:%d@%d\n",mod.filename,mod.pattern_data_size,mod.pattern_data_offset);
 #endif
 		pattern_buf = (char*)malloc(mod.pattern_data_size);
-		FILE * f = fopen(mod.filename,"rb");
-		fseek(f, mod.pattern_data_offset, SEEK_SET);
-		fread(pattern_buf,mod.pattern_data_size,1,f);
-		fclose(f);
+		f_ok = cio_open(mod.filename);
+		cio_point(&mod.pattern_bookmark);
+		cio_read(pattern_buf,mod.pattern_data_size);
+		cio_close();
 	}
 	mod_need_prefetch = 0;
 }
