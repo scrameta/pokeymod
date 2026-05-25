@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include "mod_format.h"
+#include "cio_file.h"
 
 /* -------------------------------------------------------
  * Configuration
@@ -95,11 +96,12 @@ typedef struct {
     char     filename[64];
     uint32_t pattern_data_offset;
     uint32_t pattern_data_size;
+    CioBookmark pattern_bookmark;
 
     /* Where we store the data in ram in 4k chunks: XL banks, under OS or main ram */
     uint8_t  banks;
     uint8_t  pattern_portb[64];
-    uint16_t pattern_bank_addr[64];
+    uint8_t * pattern_bank_addr[64];
     uint8_t pattern_row_buf[MOD_CHANNELS*4];
 
     /* Song data */
