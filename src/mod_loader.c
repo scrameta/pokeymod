@@ -11,12 +11,13 @@
 #include "pokeymax.h"
 #include "pokeymax_hw.h"
 #include "adpcm.h"
+#include "cio_file.h"
 
 // TODO remove all printf
 
 #define SECTOR_SIZE 256
 
-static FILE    *mod_file            = NULL;
+static uint8_t mod_file_open = 0;
 
 #pragma bss-name(push, "LOWBSS")
 static uint8_t sector_buf[SECTOR_SIZE];
@@ -35,7 +36,7 @@ static uint16_t read_be16(const uint8_t *p)
 
 void mod_file_close(void)
 {
-    if (mod_file) { fclose(mod_file); mod_file = NULL; }
+    if (mod_file_open) { cio_close(); mod_file_open = 0; }
 }
 
 void mod_set_load_progress_plugin(const ModLoadProgressPlugin *plugin)
@@ -68,18 +69,18 @@ uint8_t mod_load(const char *filename)
 
     strncpy(mod.filename, filename, 64);
 
-    if (mod_file) { fclose(mod_file); mod_file = NULL; }
-    mod_file = fopen(filename, "rb");
-    if (!mod_file) return 1;
+    mod_file_close();
+    mod_file_open = cio_open(filename)==0;
+    if (!mod_file_open) return 1;
 
-    if (fread(title, 1, 20, mod_file) != 20) return 1;
+    if (cio_read(title, 20) != 20) return 1;
     (void)title;
 
     total_sample_bytes = 0;
     total_samples_to_load = 0;
     for (i = 1; i <= MOD_MAX_SAMPLES; i++) {
         SampleInfo *si = &mod.samples[i];
-        if (fread(hdr_buf, 1, 30, mod_file) != 30) return 1;
+        if (cio_read(hdr_buf, 30) != 30) return 1;
         si->length     = read_be16(hdr_buf + 22) * 2u;
         {
             uint8_t ft_raw = hdr_buf[24] & 0x0Fu;  /* 0..15, where 8..15 = -8..-1 */
@@ -100,11 +101,11 @@ uint8_t mod_load(const char *filename)
         }
     }
 
-    if (fread(two, 1, 2, mod_file) != 2) return 1;
+    if (cio_read(two, 2) != 2) return 1;
     mod.song_length = two[0];
 
-    if (fread(mod.order_table, 1, MOD_MAX_PATTERNS, mod_file) != MOD_MAX_PATTERNS) return 1;
-    if (fread(magic, 1, 4, mod_file) != 4) return 1;
+    if (cio_read(mod.order_table, MOD_MAX_PATTERNS) != MOD_MAX_PATTERNS) return 1;
+    if (cio_read(magic, 4) != 4) return 1;
     (void)magic;
 
     mod.num_patterns = 0;
@@ -113,7 +114,8 @@ uint8_t mod_load(const char *filename)
             mod.num_patterns = mod.order_table[i];
     mod.num_patterns++;
 
-    mod.pattern_data_offset = (uint32_t)ftell(mod_file);
+    mod.pattern_data_offset = cio_tell();
+    cio_note(&mod.pattern_bookmark);  // save position for pattern loader
     mod.pattern_data_size = (uint32_t)mod.num_patterns * (uint32_t)PAT_BYTES;
 
     /* ------------------------------------------------------------------
@@ -300,7 +302,7 @@ uint8_t mod_load(const char *filename)
 
     sample_data_offset = mod.pattern_data_offset
                        + mod.pattern_data_size;
-    if (fseek(mod_file, (long)sample_data_offset, SEEK_SET) != 0) return 1;
+    cio_seek(mod.filename, sample_data_offset, SEEK_SET, &mod.pattern_bookmark);
 
     pokeymax_init();
     loaded_samples      = 0;
@@ -352,7 +354,7 @@ uint8_t mod_load(const char *filename)
                                           1u);
             }
             had_status_output = 1;
-            fseek(mod_file, (long)si->length, SEEK_CUR);
+            cio_seek(mod.filename, (uint32_t)si->length, SEEK_CUR, NULL);
             si->length = 0;
             continue;
         }
@@ -374,7 +376,7 @@ uint8_t mod_load(const char *filename)
 
         while (remaining > 0u) {
             chunk = (remaining > SECTOR_SIZE) ? SECTOR_SIZE : remaining;
-            if (fread(sector_buf, 1, chunk, mod_file) != chunk) return 1;
+            if (cio_read(sector_buf, chunk) != chunk) return 1;
             if (SI_IS_ADPCM(si)) {
                 /* Optionally downsample first, then ADPCM encode.
                  * adpcm_out (128B) holds the decimated PCM intermediate.
@@ -384,10 +386,22 @@ uint8_t mod_load(const char *filename)
                 const int8_t *src_ptr;
                 uint16_t      src_len;
                 if (ds_factor > 1u) {
+                    /* Anti-alias filtered downsample: average N consecutive
+                     * samples instead of just picking every Nth.
+                     * Suppresses aliasing from frequencies above the new
+                     * Nyquist.  Uses >> ds_shift instead of / factor
+                     * (ds_shift is log2(factor): 1,2,3 for 2x,4x,8x).
+                     * Cost: one int16_t accumulate per source sample —
+                     * cheap on 6502 during load (not VBI). */
                     uint16_t k, di = 0u;
                     uint8_t  factor = ds_factor;
-                    for (k = 0u; k < chunk; k += factor)
-                        adpcm_out[di++] = sector_buf[k];
+                    for (k = 0u; k + factor <= chunk; k += factor) {
+                        int16_t acc = 0;
+                        uint8_t m;
+                        for (m = 0u; m < factor; m++)
+                            acc += (int8_t)sector_buf[k + m];
+                        adpcm_out[di++] = (uint8_t)(int8_t)(acc >> ds_shift);
+                    }
                     src_ptr = (const int8_t*)adpcm_out;
                     src_len = di;
                 } else {
@@ -399,11 +413,15 @@ uint8_t mod_load(const char *filename)
                 pokeymax_write_ram(ram_addr + written, enc_buf, out_len);
                 written += out_len;
             } else if (ds_factor > 1u) {
-                /* Downsample: pick every Nth byte into adpcm_out (reuse as temp buf) */
+                /* Anti-alias filtered downsample for PCM: average N samples */
                 uint16_t k, out_idx = 0;
                 uint8_t  factor = ds_factor;
-                for (k = 0u; k < chunk; k += factor) {
-                    adpcm_out[out_idx++] = sector_buf[k];
+                for (k = 0u; k + factor <= chunk; k += factor) {
+                    int16_t acc = 0;
+                    uint8_t m;
+                    for (m = 0u; m < factor; m++)
+                        acc += (int8_t)sector_buf[k + m];
+                    adpcm_out[out_idx++] = (uint8_t)(int8_t)(acc >> ds_shift);
                 }
                 pokeymax_write_ram(ram_addr + written, adpcm_out, out_idx);
                 written += out_idx;
@@ -442,7 +460,7 @@ uint8_t mod_load(const char *filename)
         }
     }
 
-    if (mod_file) { fclose(mod_file); mod_file = NULL; }
+    mod_file_close();
 
     mod.order_pos     = 0;
     mod.row           = 0;
