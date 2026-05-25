@@ -5,10 +5,16 @@
 
 #include "mod_app.h"
 #include "mod_struct.h"
+#include "pokeymax.h"
+
+uint8_t app_player_main_service()
+{
+	//load_pattern();
+	return 0;
+}
 
 int main(int argc, char *argv[])
 {
-    printf("\nI am here!");
     printf("\nfilename:%s\n",mod.filename);
     app_player_run();
     return 0;
