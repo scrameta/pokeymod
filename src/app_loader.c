@@ -9,6 +9,7 @@
 #include "mod_struct.h"
 #include "mod_loader.h"
 #include "mod_default_progress_plugin.h"
+#include "cio_file.h"
 
 uint8_t app_loader_run(const char *filename, uint8_t show_progress_ui)
 {
@@ -31,7 +32,7 @@ uint8_t app_loader_run(const char *filename, uint8_t show_progress_ui)
     }
 
     printf("Loading: %s\n", filename);
-    if (mod_load(filename) != 0u) { printf("Load failed.\n"); return 1; }
+    if (mod_load(filename) != 0u) { printf("Load failed:%d.\n",cio_last_status); return 1; }
 
     printf("Orders:   %d\n", (int)mod.song_length);
     printf("Patterns: %d\n", (int)mod.num_patterns);
