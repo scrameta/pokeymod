@@ -25,7 +25,7 @@ extern const int8_t ima_index_table[16];
 
 /* Encoder state */
 typedef struct {
-    int16_t  predictor;   /* running predictor */
+    int16_t  predictor;   /* running predictor (16-bit scaled: pcm8 << 8) */
     uint8_t  step_index;  /* index into step_table */
 } ADPCMState;
 
