@@ -49,13 +49,13 @@ void app_player_run(void)
 
     POKE(0x02FC, MOD_KEY_NONE);
 
-    vbi_install();
     app_player_start();
+    vbi_install();
 
     while (mod.playing || paused) {
         display_status();
 
-        //(void)app_player_main_service(); TODO - for some pattern functions we need to call something!
+        (void)app_player_main_service();
 
         key = key_read_clear();
         if (key != MOD_KEY_NONE) {

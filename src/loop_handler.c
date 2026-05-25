@@ -53,7 +53,10 @@ uint8_t mod_sample_irq_service(void)
             if (!cs->active) continue;
 
             if (cs->has_loop && cs->loop_len > 2u) {
-                /* Re-arm with loop region. Addresses are in bytes. */
+                /* Pre-load loop region for next hardware auto-reload.
+                 * The hardware already auto-loaded the addr/len we
+                 * pre-loaded last time.  We just need to re-arm the
+                 * same values for the NEXT end-of-sample event. */
                 uint16_t loop_addr;
                 uint16_t loop_len;
 
@@ -66,11 +69,9 @@ uint8_t mod_sample_irq_service(void)
                     loop_len  = cs->loop_len;
                 }
 
-                pokeymax_channel_trigger(hw, loop_addr, loop_len);
+                pokeymax_channel_preload(hw, loop_addr, loop_len);
             } else {
-                /* One-shot: fully stop channel (DMA+IRQ off) to avoid IRQ storms
-                 * on already-ended samples. Just zeroing volume can leave the
-                 * sample-end IRQ reasserting continuously on some lengths. */
+                /* One-shot: stop channel */
                 cs->active = 0;
                 pokeymax_channel_stop(hw);
                 POKE(REG_CHANSEL, hw);

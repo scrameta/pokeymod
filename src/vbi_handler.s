@@ -160,8 +160,6 @@ vbi_cstack:    .res VBI_CSTACK_SIZE
         lda saved_sp+1
         sta c_sp+1
 
-        cli
-
         lda #0
         sta COLBK
 
@@ -171,6 +169,8 @@ vbi_cstack:    .res VBI_CSTACK_SIZE
         sta ZP_SAVE_START,x
         dex
         bpl @rest
+
+        cli
 
         ; Restore registers
         pla

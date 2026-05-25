@@ -76,3 +76,15 @@ const uint16_t arp_semi_div[16] = {
     406, 431, 456, 483, 512, 542, 575, 608
 };
 
+/*
+ * OPT-7: Arpeggio reciprocal table — replaces 32-bit divide.
+ * arp_semi_recip[n] = round(65536 / arp_semi_div[n])
+ * Usage: period_shifted = (uint16_t)((uint16_t)period * (uint16_t)recip >> 8)
+ * Index 0 unused (no shift), values 1..15 fit uint8_t (108..242).
+ * Max error < 1.7% vs exact integer divide — inaudible on 8-bit HW.
+ */
+const uint8_t arp_semi_recip[16] = {
+    0x00, 0xF2, 0xE4, 0xD8, 0xCB, 0xC0, 0xB5, 0xAB,
+    0xA1, 0x98, 0x90, 0x88, 0x80, 0x79, 0x72, 0x6C
+};
+

@@ -30,6 +30,7 @@ uint8_t pokeymax_samcfg_shadow = 0xF0;
 uint8_t pokeymax_dma_shadow    = 0x00;
 uint8_t pokeymax_irqen_shadow  = 0x00;
 
+
 uint8_t pokeymax_detect(void)
 {
     uint8_t cap;
@@ -59,6 +60,7 @@ void pokeymax_init(void)
     POKE(REG_COVOX_CH2, 128);
     POKE(REG_COVOX_CH3, 128);
     POKE(REG_COVOX_CH4, 128);
+
 }
 
 uint16_t pokeymax_alloc(uint16_t bytes)
@@ -153,10 +155,14 @@ void pokeymax_channel_setup(uint8_t chan, uint16_t addr, uint16_t len,
 }
 
 /*
- * pokeymax_channel_trigger() - retrigger with new addr/len (for loops)
- * Toggles DMA 1->0->1 to restart from new address.
+ * pokeymax_channel_preload() - pre-load addr/len for next auto-reload
+ *
+ * Writes the loop region address/length into the PokeyMAX registers
+ * WITHOUT restarting DMA.  The hardware will auto-reload from these
+ * registers when the current buffer ends (nextsample event).
+ * Also clears the pending IRQ for this channel.
  */
-void pokeymax_channel_trigger(uint8_t chan, uint16_t addr, uint16_t len)
+void pokeymax_channel_preload(uint8_t chan, uint16_t addr, uint16_t len)
 {
     unsigned char bit  = (unsigned char)(1u << (chan - 1u));
     unsigned char nbit = (unsigned char)(~bit & 0x0Fu);
@@ -164,22 +170,11 @@ void pokeymax_channel_trigger(uint8_t chan, uint16_t addr, uint16_t len)
     POKE(REG_CHANSEL, chan);
     POKE(REG_ADDRL, (unsigned char)(addr & 0xFF));
     POKE(REG_ADDRH, (unsigned char)(addr >> 8));
-    POKE(REG_LENL,  (unsigned char)((len-1u) & 0xFF));  /* doc: Length=L+H*256+1 */
+    POKE(REG_LENL,  (unsigned char)((len-1u) & 0xFF));
     POKE(REG_LENH,  (unsigned char)((len-1u) >> 8));
 
-    /* Mask IRQ for this channel while generating the DMA retrigger edge. */
-    pokeymax_irqen_shadow = (unsigned char)(pokeymax_irqen_shadow & nbit);
-    POKE(REG_IRQEN, pokeymax_irqen_shadow);
-
-    pokeymax_dma_shadow = (unsigned char)(pokeymax_dma_shadow & nbit);
-    POKE(REG_DMA, pokeymax_dma_shadow);
-    pokeymax_dma_shadow = (unsigned char)(pokeymax_dma_shadow | bit);
-    POKE(REG_DMA, pokeymax_dma_shadow);
-
-    /* Drop the synthetic edge IRQ for this channel, then unmask IRQ again. */
+    /* Clear this channel's pending IRQ */
     POKE(REG_IRQACT, nbit);
-    pokeymax_irqen_shadow = (unsigned char)(pokeymax_irqen_shadow | bit);
-    POKE(REG_IRQEN, pokeymax_irqen_shadow);
 }
 
 void pokeymax_channel_set_period_vol(uint8_t chan, uint16_t period, uint8_t vol)

@@ -21,13 +21,18 @@ ASFLAGS = -t $(TARGET)
 SHARED_C = src/pokeymax_hw.c src/adpcm.c
 
 # --- Main loader and player ---
-LOADER_C = src/loader_main.c src/mod_loader.c src/app_loader.c src/mod.c src/mod_default_progress_plugin.c \
+LOADER_C = src/mod_pattern_bank.c src/mod_loader.c src/app_loader.c src/mod.c src/mod_default_progress_plugin.c src/mod_pattern_bank_loader.c src/cio_file.c src/cio_call.s src/sdx_path.c \
            $(SHARED_C)
 LOADER_S = src/memcpy_banked.s
 
-PLAYER_C = src/player_main.c src/app_player.c src/app_player_core.c src/modplayer.c src/chan_base.c \
+PLAYER_C = src/app_player.c src/app_player_core.c src/modplayer.c src/chan_base.c \
            src/pokeymax_hw.c src/tables.c src/mod_pattern_bank.c src/mod.c
 PLAYER_S = src/vbi_handler.s src/loop_handler_irq.s src/memcpy_banked.s
+
+LOADPLAY_C = src/mod_pattern_bank.c src/mod_loader.c src/app_loader.c src/mod.c src/mod_default_progress_plugin.c src/mod_pattern_bank_loader.c \
+           $(SHARED_C) src/app_player.c src/app_player_core.c src/modplayer.c src/chan_base.c src/cio_file.c src/cio_call.s \
+           src/tables.c 
+LOADPLAY_S = src/vbi_handler.s src/loop_handler_irq.s src/memcpy_banked.s
 
 # --- Tests (each is a single .c + shared) ---
 TEST2_C  = tests/test2_header.c
@@ -45,37 +50,33 @@ TEST11_C = tests/test11_row0_decode.c src/pokeymax_hw.c src/mod_loader.c src/mod
 TEST56_S = src/vbi_handler.s
 TEST56_COMPAT_S = src/loop_handler_irq_compat.s
 
-all: modload.xex modply.xex test2.xex test3.xex test3ad.xex test4.xex test5.xex test6.xex test7.xex test8.xex test9.xex test9b.xex test10.xex test11.xex
+#all: modplay.xex modplay2.xex modload.xex modply.xex test2.xex test3.xex test3ad.xex test4.xex test5.xex test6.xex test7.xex test8.xex 
+all: modplay.xex modplay2.xex modload.xex modply.xex test2.xex test3.xex test3ad.xex test4.xex test5.xex 
 .PHONY: all player test2 test3 test3-adpcm test4 test5 test6 test7 test8 test9 test9b test10 test11 test-adpcm-linux clean
 
-#player: modplay.xex
+player: modplay2.xex
 
 modload.xex: $(LOADER_C) $(LOADER_S)
 	cl65 $(CFLAGSLOAD) -t $(TARGET) -m modload.map \
-	     -o modload.xex $(LOADER_C) $(LOADER_S)
+	     -o modload.xex src/loader_main.c $(LOADER_C) $(LOADER_S)
 	@echo "Built: modload.xex ($$(wc -c < modload.xex) bytes)"
 
 modply.xex: $(PLAYER_C) $(PLAYER_S)
 	cl65 $(CFLAGSPLAY) -t $(TARGET) -m modply.map \
-	     -o modply.xex $(PLAYER_C) $(PLAYER_S)
+	     -o modply.xex src/player_main.c $(PLAYER_C) $(PLAYER_S)
 	@echo "Built: modply.xex ($$(wc -c < modply.xex) bytes)"
 
 modplay.xex: modply.xex modload.xex
 	#./xex-filter.pl -o modplay.xex -i 1,2,3,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,5,6,7,8 -w738=10241,130=0,0,0,0,0,0,0,0,0,0,0,0,0,0 modload.xex modply.xex
 	#./xex-filter.pl -o modplay.xex -i 1,2,3,9,7,8 -w738=10241,130=0,0,0,0,0,0,0,0,0,0,0,0,0,0 modload.xex modply.xex
-	./xex-filter.pl -o modplay.xex -i 1,2,3,9,5,6,7,8 -w738=10241 modload.xex modply.xex
+	#./xex-filter.pl -o modplay.xex -i 1,2,3,9,5,6,7,8 -w738=9217 modload.xex modply.xex
+	./xex-filter.pl -o modplay.xex -i 1,2,3,9,7,8 -w738=7681 modload.xex modply.xex
+	#cat modload.xex modply.xex > modplay.xex
 
-
-hello.xex: src/hello.c
-	cl65 $(CFLAGS) -o hello.xex src/hello.c
-	@echo "Built: hello.xex"
-
-world.xex: src/world.c
-	cl65 $(CFLAGS) -o world.xex src/world.c
-	@echo "Built: world.xex"
-
-hellow.xex: hello.xex world.xex
-	./xex-filter.pl -o hellow.xex -i 1,2,3,9,5,6,7,8 -w738=8193  hello.xex world.xex
+modplay2.xex: $(LOADER_C) $(LOADER_S)
+	cl65 $(CFLAGSLOAD) -t $(TARGET) -m modplay2.map \
+	     -o modplay2.xex src/all_main.c $(LOADPLAY_C) $(LOADPLAY_S)
+	@echo "Built: modplay2.xex ($$(wc -c < modplay2.xex) bytes)"
 
 test2.xex: $(TEST2_C)
 	cl65 $(CFLAGS) -o test2.xex $(TEST2_C)
@@ -123,5 +124,5 @@ test-adpcm-linux: tests/adpcm_roundtrip_linux.c src/adpcm.c include/adpcm.h
 	./tests/adpcm_roundtrip_linux
 
 clean:
-	rm -f *.xex modplay.map 
-	rm -f *.o src/*.o tests/*.o 
+	rm -f *.xex *.map 
+	rm -f *.o src/*.o tests/*.o tests/linux_mod_harness tests/linux_mod_harness_io tests/linux_mod_harness_bank

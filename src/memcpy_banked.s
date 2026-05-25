@@ -64,8 +64,10 @@ _memcpy_banked:
     stx ptr1+1
 
     ;----------------------------------------------------------
-    ; Disable NMI then IRQ
+    ; Save interrupt state then disable NMI and IRQ
     ;----------------------------------------------------------
+    php                     ; save P (including I flag) so we can
+                            ; restore the caller's interrupt state
     lda #$00
     sta NMIEN
     sei
@@ -113,14 +115,22 @@ _memcpy_banked:
 
 @done:
     ;----------------------------------------------------------
-    ; Restore bank then re-enable interrupts
+    ; Restore bank then re-enable interrupts.
+    ; Restore PORTB first (while interrupts are still off),
+    ; then restore the original interrupt state.  We do NOT
+    ; blindly CLI here because the caller may be running
+    ; inside the deferred VBI with SEI in effect.  Instead
+    ; we restore NMIEN (which the caller told us to) and
+    ; leave the I flag as it was on entry (saved in P on the
+    ; stack by PHP).
     ;----------------------------------------------------------
     lda restore_portb
     sta PORTB
 
-    cli
     lda restore_nmien
     sta NMIEN
+
+    plp                     ; restore I flag (and the rest of P)
 
     rts
 
