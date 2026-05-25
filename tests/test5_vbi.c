@@ -43,6 +43,8 @@ int main(void)
     char buf[6];
     uint16_t last = 0;
 
+    POKE(0xD301, PEEK(0xD301) | 0x01);
+
     clrscr();
     printf("Test 5: Deferred VBI\n");
     printf("--------------------\n");
@@ -51,7 +53,9 @@ int main(void)
     printf("Press any key to stop.\n\n");
 
     POKE(CH, 255);
+    *(char *)(0xD01A) = 0x2f;
     vbi_install();
+    *(char *)(0xD01A) = 0x24;
 
     while (PEEK(CH) == 255) {
         uint16_t now = vbi_ticks;

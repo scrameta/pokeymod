@@ -16,13 +16,13 @@ REG_IRQACT  = $D292
 REG_VOL     = $D28F
 
 ; ChanState field offsets/stride (cc65 layout checked in loop_handler.c)
-CHAN_STRIDE       = 31
-CS_SAM_ADDR       = 18
-CS_LOOP_START     = 22
-CS_LOOP_LEN       = 24
-CS_HAS_LOOP       = 26
-CS_IS_ADPCM       = 27
-CS_ACTIVE         = 30
+CHAN_STRIDE       = 33
+CS_SAM_ADDR       = 20
+CS_LOOP_START     = 24
+CS_LOOP_LEN       = 26
+CS_HAS_LOOP       = 28
+CS_IS_ADPCM       = 29
+CS_ACTIVE         = 32
 
 ; temps (BSS, not reentrant-safe by design: IRQ path only)
 .segment "ZEROPAGE"
@@ -98,6 +98,11 @@ nbit_tmp:    .res 1
 :
 
 @do_loop:
+        ; PokeyMAX hardware auto-reloaded the loop addr/len that we
+        ; pre-loaded last time (from trigger_setup_hw or previous IRQ).
+        ; Our job: pre-load the SAME loop addr/len again so the hardware
+        ; has it ready for the NEXT end-of-sample.  No DMA restart needed.
+
         ; addr_tmp = sam_addr + loop_start (or + loop_start>>1 for ADPCM)
         ldy #CS_SAM_ADDR
         lda (cs_ptr),y
@@ -146,13 +151,9 @@ nbit_tmp:    .res 1
         lda (cs_ptr),y
         sta len_tmp+1
 
-        ; nbit = ~bitmask & $0f
-        lda bitmask
-        eor #$ff
-        and #$0f
-        sta nbit_tmp
-
-        ; CHANSEL = chan_num ; write addr/len (len-1)
+        ; Pre-load loop addr/len into registers for next auto-reload.
+        ; No DMA restart — hardware is already playing the loop region
+        ; that it auto-loaded when the previous buffer ended.
         lda chan_num
         sta REG_CHANSEL
         lda addr_tmp
@@ -167,29 +168,14 @@ nbit_tmp:    .res 1
         sbc #0
         sta REG_LENH
 
-        ; mask IRQ bit in shadow + hw
-        lda _pokeymax_irqen_shadow
-        and nbit_tmp
-        sta _pokeymax_irqen_shadow
-        sta REG_IRQEN
+        ; Clear this channel's IRQ and re-enable for next end-of-sample
+        lda bitmask
+        eor #$ff
+        and #$0f
+        sta nbit_tmp
 
-        ; DMA 1->0->1 using shadow
-        lda _pokeymax_dma_shadow
-        and nbit_tmp
-        sta _pokeymax_dma_shadow
-        sta REG_DMA
-        lda _pokeymax_dma_shadow
-        ora bitmask
-        sta _pokeymax_dma_shadow
-        sta REG_DMA
-
-        ; drop synthetic edge IRQ for this channel, then unmask irq again
         lda nbit_tmp
         sta REG_IRQACT
-        lda _pokeymax_irqen_shadow
-        ora bitmask
-        sta _pokeymax_irqen_shadow
-        sta REG_IRQEN
         jmp @next_ch
 
 @oneshot:
@@ -198,7 +184,7 @@ nbit_tmp:    .res 1
         lda #0
         sta (cs_ptr),y
 
-        ; shadow &= nbit ; hw write DMA/IRQEN
+        ; Stop channel: DMA off, IRQ off, volume 0
         lda bitmask
         eor #$ff
         and #$0f
@@ -212,7 +198,6 @@ nbit_tmp:    .res 1
         sta _pokeymax_irqen_shadow
         sta REG_IRQEN
 
-        ; volume=0 for selected channel
         lda chan_num
         sta REG_CHANSEL
         lda #0

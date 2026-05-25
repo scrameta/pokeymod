@@ -28,7 +28,17 @@
 #include <assert.h>
 #include <stdarg.h>
 #include <stdbool.h>
+#include <math.h>
 
+#include "mod_struct.h"
+#include "mod_pattern.h"
+#ifdef IO
+#include "mod_pattern_io.h"
+#endif
+#ifdef BANK
+#include "mod_pattern_bank_loader.h"
+#endif
+#include "mod_loader.h"
 #include "modplayer.h"
 #include "pokeymax_hw.h"
 #include "adpcm.h"
@@ -45,8 +55,17 @@ extern uint8_t pmdbg_irq_count_ch[4];
 
 typedef struct {
     uint8_t  configured;
+
+    /* "Register" state — written by CPU via POKE, latched into active on nextsample */
+    uint16_t reg_addr;
+    uint16_t reg_len_samples;   /* programmed LEN+1 (samples) */
+    uint16_t reg_period;
+    uint8_t  reg_vol;
+
+    /* "Active" playback state — what the sample engine is actually using.
+     * Loaded from reg_* on nextsample (syncreset or end-of-sample). */
     uint16_t addr;
-    uint16_t len_samples;      /* programmed LEN+1 (samples) */
+    uint16_t len_samples;
     uint16_t period;
     uint8_t  vol;
     uint8_t  is_adpcm;
@@ -58,6 +77,9 @@ typedef struct {
     /* crude simulator state */
     uint32_t samples_remaining_q8; /* in samples<<8 */
     uint32_t play_pos_q16;        /* source sample index in Q16 */
+
+    /* IRQ latency model: count output samples before servicing loop IRQ */
+    uint16_t irq_delay_remaining;
 
     /* ADPCM renderer state (reset on trigger/retrigger) */
     ADPCMState adpcm_state;
@@ -91,6 +113,17 @@ static struct {
     uint8_t wav_header_written;
     int wav_gain;            /* linear gain multiplier for mixed sample */
     int interp_linear;       /* 1=linear interpolation, 0=nearest */
+    int lpf_enabled;         /* 1=apply PokeyMAX digital LPF model */
+
+    /* PokeyMAX two-stage IIR low-pass filter state (per VHDL simple_low_pass_filter).
+     * Stage 1: accum += (in*16 - accum) / 16   (alpha=1/16, runs at 1.8MHz)
+     * Stage 2: accum2 += (accum - accum2) / 8   (alpha=1/8)
+     * At 44.1kHz output rate (~40.8 filter clocks per sample), effective decay:
+     *   stage1: (1-1/16)^40.8 = 0.0718
+     *   stage2: (1-1/8)^40.8  = 0.0043
+     * Both stages nearly fully settle per output sample. */
+    double lpf_stage1;
+    double lpf_stage2;
 
     /* Diagnostics */
     int dump_placement;
@@ -148,8 +181,18 @@ static void mock_channel_recalc_mode(int idx) {
     g.ch[idx].is_8bit  = (cfg & (uint8_t)(bit << 4)) ? 1u : 0u;
 }
 
-static void mock_channel_start_or_retrigger(int idx) {
+/* Model PokeyMAX channel.vhdl nextsample event:
+ * Latch register values into active playback state, reset position.
+ * This fires on DMA syncreset (0→1 edge) and on end-of-sample. */
+static void mock_channel_nextsample(int idx) {
     MockChan *c = &g.ch[idx];
+    /* Latch registers into active state */
+    c->addr = c->reg_addr;
+    c->len_samples = c->reg_len_samples;
+    c->period = c->reg_period;
+    c->vol = c->reg_vol;
+    mock_channel_recalc_mode(idx);
+    /* Reset playback position */
     uint32_t len = c->len_samples ? c->len_samples : 1u;
     c->samples_remaining_q8 = len << 8;
     c->play_pos_q16 = 0;
@@ -157,7 +200,12 @@ static void mock_channel_start_or_retrigger(int idx) {
     c->adpcm_state.step_index = 0;
     c->adpcm_decoded_pos = 0;
     c->adpcm_last = 0;
+}
+
+static void mock_channel_start_or_retrigger(int idx) {
+    mock_channel_nextsample(idx);
     g.total_retriggers++;
+    MockChan *c = &g.ch[idx];
     if (g.verbose) {
         fprintf(stdout,
                 "[F=%" PRIu64 "] CH%d trigger addr=%u len=%u per=%u vol=%u mode=%s%s dma=%u irq=%u\n",
@@ -349,32 +397,37 @@ void pokeymax_mock_poke(uint16_t addr, uint8_t val) {
                 MockChan *c = &g.ch[g.chansel - 1];
                 c->configured = 1;
                 switch (addr) {
+                    /* ADDR/LEN: write to register buffer (latched on nextsample) */
                     case REG_ADDRL:
-                        c->addr = (uint16_t)((c->addr & 0xFF00u) | val);
+                        c->reg_addr = (uint16_t)((c->reg_addr & 0xFF00u) | val);
                         break;
                     case REG_ADDRH:
-                        c->addr = (uint16_t)((c->addr & 0x00FFu) | ((uint16_t)val << 8));
+                        c->reg_addr = (uint16_t)((c->reg_addr & 0x00FFu) | ((uint16_t)val << 8));
                         break;
                     case REG_LENL: {
-                        uint16_t lminus1 = (uint16_t)((c->len_samples ? (c->len_samples - 1u) : 0u) & 0xFF00u);
+                        uint16_t lminus1 = (uint16_t)((c->reg_len_samples ? (c->reg_len_samples - 1u) : 0u) & 0xFF00u);
                         lminus1 = (uint16_t)(lminus1 | val);
-                        c->len_samples = (uint16_t)(lminus1 + 1u);
+                        c->reg_len_samples = (uint16_t)(lminus1 + 1u);
                         break;
                     }
                     case REG_LENH: {
-                        uint16_t lminus1 = (uint16_t)((c->len_samples ? (c->len_samples - 1u) : 0u) & 0x00FFu);
+                        uint16_t lminus1 = (uint16_t)((c->reg_len_samples ? (c->reg_len_samples - 1u) : 0u) & 0x00FFu);
                         lminus1 = (uint16_t)(lminus1 | ((uint16_t)val << 8));
-                        c->len_samples = (uint16_t)(lminus1 + 1u);
+                        c->reg_len_samples = (uint16_t)(lminus1 + 1u);
                         break;
                     }
+                    /* PERIOD/VOL: immediate (affect current playback AND register buffer) */
                     case REG_PERL:
-                        c->period = (uint16_t)((c->period & 0x0F00u) | val);
+                        c->reg_period = (uint16_t)((c->reg_period & 0x0F00u) | val);
+                        c->period = c->reg_period;
                         break;
                     case REG_PERH:
-                        c->period = (uint16_t)((c->period & 0x00FFu) | (((uint16_t)val & 0x0Fu) << 8));
+                        c->reg_period = (uint16_t)((c->reg_period & 0x00FFu) | (((uint16_t)val & 0x0Fu) << 8));
+                        c->period = c->reg_period;
                         break;
                     case REG_VOL:
-                        c->vol = (uint8_t)(val & 0x3Fu);
+                        c->reg_vol = (uint8_t)(val & 0x3Fu);
+                        c->vol = c->reg_vol;
                         break;
                 }
                 mock_channel_recalc_mode(g.chansel - 1);
@@ -500,7 +553,9 @@ static void diag_dump_sample_placement(void) {
         uint32_t end = addr + len_st; /* half-open */
         if (end > max_end) max_end = end;
 
-        printf("%3d  %5u  %5u  %5u  %5u  %8u %7u %-6s %2u %s\n",
+        uint8_t ds_shift = SI_DS_SHIFT(s);
+        uint8_t ds_factor = (uint8_t)(1u << ds_shift);  /* 1, 2, 4, or 8 */
+        printf("%3d  %5u  %5u  %5u  %5u  %8u %7u %-6s %2u\n",
                i,
                (unsigned)addr,
                (unsigned)(end ? (end - 1u) : addr),
@@ -508,9 +563,9 @@ static void diag_dump_sample_placement(void) {
                (unsigned)s->length,
                (unsigned)s->loop_start,
                (unsigned)s->loop_len,
-               s->is_adpcm ? "ADPCM" : "PCM",
-               (unsigned)(s->downsample_factor ? s->downsample_factor : 1u),
-               s->name);
+               SI_IS_ADPCM(s) ? "ADPCM" : "PCM",
+               (unsigned)(ds_factor ? ds_factor : 1u)
+               );
 
         if (len_st == 0) {
             printf("  !! S%02d has zero stored length\n", i);
@@ -523,7 +578,7 @@ static void diag_dump_sample_placement(void) {
             printf("  !! S%02d crosses 16-bit address space (0x10000): addr=%u len=%u end=%u\n",
                    i, (unsigned)addr, (unsigned)len_st, (unsigned)end);
         }
-        if (s->has_loop) {
+        if (SI_HAS_LOOP(s)) {
             uint32_t loop_end_src = (uint32_t)s->loop_start + (uint32_t)s->loop_len;
             if (loop_end_src > (uint32_t)s->length) {
                 printf("  !! S%02d source loop exceeds source length: loop_end=%u > src_len=%u\n",
@@ -626,7 +681,8 @@ static uint32_t period_to_samples_per_out_q16(uint16_t hw_period, uint32_t out_r
     const uint32_t clock_hz = 3546895u;
     if (hw_period == 0) hw_period = 1;
     if (out_rate_hz == 0) out_rate_hz = 44100u;
-    /* source sample rate ~= clock / period; convert to source-samples/output-sample in Q16 */
+    /* PokeyMAX sample clock = 2*PHI2 ≈ 3.55MHz = Paula clock.
+     * source_rate = clock_hz / period.  No extra /2 — the 2x is in the clock. */
     uint32_t inc_q16 = (uint32_t)(((uint64_t)clock_hz << 16) / ((uint64_t)hw_period * out_rate_hz));
     if (inc_q16 == 0) inc_q16 = 1;
     return inc_q16;
@@ -650,7 +706,10 @@ static void mock_render_audio_for_one_vbi(void) {
 
             int16_t s8 = g.interp_linear ? mock_fetch_pcm8_linear_safe(c) : (int16_t)mock_fetch_pcm8(c);
 
-            /* simple linear-ish volume scaling (0..64-ish) */
+            /* Volume scaling.  PokeyMAX uses unsigned samples internally
+             * (XOR bit7 in VHDL), but the AC component after DC removal
+             * is mathematically identical to signed multiplication.
+             * Keep the simpler signed path for the shim. */
             int v = (int)(c->vol & 0x3Fu);
             if (!(dbg.solo_chan >= 0 && i != dbg.solo_chan)) {
                 mix += ((int)s8 * v) / 32;
@@ -684,24 +743,22 @@ static void mock_render_audio_for_one_vbi(void) {
                 inc_q16 -= to_end_q16;
                 c->play_pos_q16 = ((uint32_t)(len - 1u) << 16);
 
+                /* PokeyMAX channel.vhdl nextsample: hardware auto-reloads
+                 * from the register buffer (addr/len written by CPU).
+                 * This happens in the same clock cycle — no gap. */
+                mock_channel_nextsample(i);
+
+                /* Fire the IRQ.  On real hardware, the 6502 has latency
+                 * before the loop handler runs.  Model this by setting a
+                 * delay counter; serviced after N output samples. */
                 if (c->irq_en) {
                     g.regs[REG_IRQACT] |= bit;
                     g.total_irqs++;
+                    c->irq_delay_remaining = 3; /* ~68µs ≈ ~120 6502 cycles */
                 }
-                mock_service_loop_irqs_if_needed();
 
-                /* refresh state after possible retrigger/reprogram by loop handler */
-                c = &g.ch[i];
-                c->dma_on = (g.regs[REG_DMA] & bit) ? 1u : 0u;
-                c->irq_en = (g.regs[REG_IRQEN] & bit) ? 1u : 0u;
-
-                if (!c->dma_on) break;
-
-                /* If no retrigger occurred, avoid infinite looping at sample end */
-                if (c->play_pos_q16 >= (((uint32_t)(c->len_samples ? c->len_samples : 1u) << 16) - 1u)) {
-                    /* one-shot / no immediate loop service path: stay clamped */
-                    break;
-                }
+                /* nextsample reloaded len_samples — if still zero, stop */
+                if (!c->len_samples) break;
 
                 if (++guard > 64u) {
                     /* Safety: absurdly tiny loops at high pitch can wrap many times per output sample */
@@ -709,7 +766,37 @@ static void mock_render_audio_for_one_vbi(void) {
                 }
             }
         }
+
+        /* Deferred IRQ servicing: model 6502 IRQ latency.
+         * Each output sample, decrement any pending delay counter.
+         * When it reaches zero, call the loop handler. */
+        for (int i = 0; i < 4; i++) {
+            MockChan *c = &g.ch[i];
+            if (c->irq_delay_remaining > 0) {
+                if (--c->irq_delay_remaining == 0) {
+                    mock_service_loop_irqs_if_needed();
+                }
+            }
+        }
+
         mix *= g.wav_gain;
+
+        /* PokeyMAX digital LPF model: two-stage IIR low-pass.
+         * At the output sample rate (~44.1kHz), each stage runs ~40.8
+         * filter iterations at 1.8MHz.  We model the net effect per
+         * output sample rather than iterating at 1.8MHz.
+         * Stage 1: alpha_eff ≈ 0.928, decay = 0.072
+         * Stage 2: alpha_eff ≈ 0.996, decay = 0.004 */
+        if (g.lpf_enabled) {
+            /* Number of 1.8MHz filter clocks per output sample */
+            double ratio = 1800000.0 / (double)g.wav_rate;
+            double decay1 = pow(1.0 - 1.0/16.0, ratio);
+            double decay2 = pow(1.0 - 1.0/8.0, ratio);
+            g.lpf_stage1 = g.lpf_stage1 * decay1 + (double)mix * (1.0 - decay1);
+            g.lpf_stage2 = g.lpf_stage2 * decay2 + g.lpf_stage1 * (1.0 - decay2);
+            mix = (int)g.lpf_stage2;
+        }
+
         if (mix > 32767) mix = 32767;
         if (mix < -32768) mix = -32768;
         wav_write_sample_i16((int16_t)mix);
@@ -720,7 +807,7 @@ static void mock_render_audio_for_one_vbi(void) {
 static void dump_pos(const char *tag) {
     printf("[%s] order=%u row=%u tick=%u playing=%u need_prefetch=%u IRQACT=%02X DMA=%02X IRQEN=%02X\n",
            tag,
-           (unsigned)mod_get_order(), (unsigned)mod_get_row(), (unsigned)mod.tick,
+           (unsigned)mod.order_pos, (unsigned)mod.row, (unsigned)mod.tick,
            (unsigned)mod.playing, (unsigned)mod_need_prefetch,
            (unsigned)pokeymax_mock_peek(REG_IRQACT),
            (unsigned)pokeymax_mock_peek(REG_DMA),
@@ -795,7 +882,10 @@ int main(int argc, char **argv) {
 
     memset(&g, 0, sizeof(g));
     memset(dbg_prev, 0, sizeof(dbg_prev));
-    g.interp_linear = 1;      /* default to linear interpolation */
+    g.interp_linear = 0;      /* default to nearest (sample-and-hold), matches PokeyMAX DAC */
+    g.lpf_enabled = 1;        /* default to PokeyMAX digital LPF model */
+    g.lpf_stage1 = 0.0;
+    g.lpf_stage2 = 0.0;
     g.regs[REG_SAMCFG] = 0xF0; /* reset default */
     g.wav_gain = 96;          /* decent starting point for 4x 8-bit mix */
     g.dump_placement = 0;
@@ -839,7 +929,12 @@ int main(int argc, char **argv) {
             dbg.enabled = 1;
         } else if (strcmp(argv[i], "--interp-nearest") == 0) {
             g.interp_linear = 0;
-            dbg.enabled = 1;
+        } else if (strcmp(argv[i], "--interp-linear") == 0) {
+            g.interp_linear = 1;
+        } else if (strcmp(argv[i], "--lpf") == 0) {
+            g.lpf_enabled = 1;
+        } else if (strcmp(argv[i], "--no-lpf") == 0) {
+            g.lpf_enabled = 0;
         } else if (strcmp(argv[i], "--trace-csv") == 0 && i + 1 < argc) {
             dbg.csv_path = argv[++i];
             dbg.enabled = 1;
@@ -869,6 +964,11 @@ int main(int argc, char **argv) {
         fprintf(stderr, "mod_load failed for %s\n", modfile);
         return 1;
     }
+
+#ifdef BANK
+    load_patterns_to_banks();
+#endif
+
     mod_play();
 
     if (g.dump_placement) {
@@ -899,16 +999,36 @@ int main(int argc, char **argv) {
 
     dump_pos("start");
 
-    uint8_t prev_order = mod_get_order();
-    uint8_t prev_row = mod_get_row();
+    uint8_t prev_order = mod.order_pos;
+    uint8_t prev_row = mod.row;
     uint8_t prev_tick = mod.tick;
 
     for (g.frame_no = 0; g.frame_no < max_frames && mod.playing; g.frame_no++) {
+        /* VBI tick (player logic) — runs FIRST, just like real hardware
+         * where the deferred VBI fires and POKEs registers before the
+         * audio hardware plays the next frame's worth of samples. */
+        pokeymax_mock_poke(RTCLOK,pokeymax_mock_peek(RTCLOK)+1);
+        mod_vbi_tick();
+
+        /* Main loop prefetch polling */
+#ifdef IO
+        if (mod_need_prefetch) {
+            if (g.trace_boundary) {
+                printf("[F=%" PRIu64 "] prefetch requested @ order=%u row=%u tick=%u\n",
+                       g.frame_no, (unsigned)mod.order_pos, (unsigned)mod.row, (unsigned)mod.tick);
+            }
+            load_pattern();
+            if (g.trace_boundary) {
+                printf("[F=%" PRIu64 "] prefetch complete\n", g.frame_no);
+            }
+        }
+#endif
+
         if (g.wav_enabled) {
-            /* Accurate desktop debug path: render advances sample engine and services loop IRQs immediately. */
+            /* Render AFTER tick so register writes take effect immediately,
+             * matching real hardware where PokeyMAX plays with new state. */
             mock_render_audio_for_one_vbi();
         } else {
-            /* Fast non-audio path: VBI-granularity hardware progress is good enough for tracing. */
             mock_step_sample_engine_one_vbi();
             mock_service_loop_irqs_if_needed();
         }
@@ -917,43 +1037,23 @@ int main(int argc, char **argv) {
             dbg_trace_frame();
         }
 
-        /* VBI tick (player logic) */
-        pokeymax_mock_poke(RTCLOK,pokeymax_mock_peek(RTCLOK)+1);
-        mod_vbi_tick();
-
-        /* Main loop prefetch polling */
-        if (mod_need_prefetch) {
-            if (g.trace_boundary) {
-                printf("[F=%" PRIu64 "] prefetch requested @ order=%u row=%u tick=%u\n",
-                       g.frame_no, (unsigned)mod_get_order(), (unsigned)mod_get_row(), (unsigned)mod.tick);
-            }
-            if (mod_prefetch_next_pattern() != 0u) {
-                fprintf(stderr, "prefetch failed at frame=%" PRIu64 " order=%u row=%u\n",
-                        g.frame_no, (unsigned)mod_get_order(), (unsigned)mod_get_row());
-                break;
-            }
-            if (g.trace_boundary) {
-                printf("[F=%" PRIu64 "] prefetch complete\n", g.frame_no);
-            }
-        }
-
-        if (mod_get_order() != prev_order || mod_get_row() != prev_row || mod.tick != prev_tick) {
+        if (mod.order_pos != prev_order || mod.row != prev_row || mod.tick != prev_tick) {
             if (g.trace_boundary) {
                 /* Emit detailed trace around row 60..2 boundary or on order change */
-                uint8_t r = mod_get_row();
-                if ((prev_row >= 60u) || (r <= 3u) || (mod_get_order() != prev_order)) {
+                uint8_t r = mod.row;
+                if ((prev_row >= 60u) || (r <= 3u) || (mod.order_pos != prev_order)) {
                     printf("[F=%" PRIu64 "] pos %u:%u:%u -> %u:%u:%u need_prefetch=%u IRQACT=%02X DMA=%02X IRQEN=%02X\n",
                            g.frame_no,
                            (unsigned)prev_order, (unsigned)prev_row, (unsigned)prev_tick,
-                           (unsigned)mod_get_order(), (unsigned)mod_get_row(), (unsigned)mod.tick,
+                           (unsigned)mod.order_pos, (unsigned)mod.row, (unsigned)mod.tick,
                            (unsigned)mod_need_prefetch,
                            (unsigned)pokeymax_mock_peek(REG_IRQACT),
                            (unsigned)pokeymax_mock_peek(REG_DMA),
                            (unsigned)pokeymax_mock_peek(REG_IRQEN));
                 }
             }
-            prev_order = mod_get_order();
-            prev_row = mod_get_row();
+            prev_order = mod.order_pos;
+            prev_row = mod.row;
             prev_tick = mod.tick;
         }
     }

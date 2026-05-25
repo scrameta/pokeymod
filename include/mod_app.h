@@ -23,15 +23,6 @@ uint8_t app_loader_run(const char *filename, uint8_t show_progress_ui);
 void app_player_vbi_tick(void);
 
 /*
- * app_player_irq_handler()
- * Fast IRQ service helper for PokeyMAX sample-end IRQs.
- *
- * Returns 1 if a PokeyMAX sample-end IRQ was pending and serviced,
- * 0 if not ours (caller should chain to next IRQ handler).
- */
-uint8_t app_player_irq_handler(void);
-
-/*
  * app_player_main_service()
  * Foreground/main-loop helper. Performs at most one 256-byte pattern
  * prefetch chunk when needed.
@@ -49,7 +40,7 @@ uint8_t app_player_main_service(void);
 
 /* Start/stop helpers for integrators managing their own VBI/IRQ/main loop. */
 void app_player_start(void);
-void app_player_stop(uint8_t close_file);
+void app_player_stop(void);
 
 /*
  * app_player_run()

@@ -256,9 +256,6 @@ player hooks instead of `app_player_run()`:
 
 - `app_player_start()` once after successful load
 - `app_player_vbi_tick()` from your deferred VBI/music tick callback
-- `app_player_irq_handler()` from your IRQ chain head
-  - returns `0` quickly when IRQ is not PokeyMAX sample-end; chain onward
-  - returns `1` when serviced
 - `app_player_main_service()` from foreground/main loop
   - call once per frame (`N=1`) for robust pattern streaming
   - does at most one 256-byte chunk per call when prefetch is due
@@ -270,12 +267,6 @@ Minimal chaining pattern:
 ```c
 void my_deferred_vbi(void) {
     app_player_vbi_tick();
-}
-
-void my_irq(void) {
-    if (!app_player_irq_handler()) {
-        chain_to_prev_irq();
-    }
 }
 
 void my_main_loop_step(void) {

@@ -1,75 +1,23 @@
 /*
  * mod_loader.c - MOD loader with double-buffered pattern cache
  *
- * Pattern RAM strategy (no VBI disk I/O):
- *
- *   Two 1KB pattern buffers. 'current' is what the VBI reads (memcpy only,
- *   no disk). 'next' is filled by the main loop between VBIs.
- *
- *   When the player advances to a new pattern, mod_pattern_advance() swaps
- *   the pointers and sets mod_need_prefetch=1. The main loop then calls
- *   mod_prefetch_next_pattern() which does the actual fseek+fread.
- *
- *   The 1050 disk drive takes ~100ms to seek + read 1KB. At 125BPM/speed6
- *   a pattern lasts ~7.5 seconds, so there is ample time.
- *
- *   Total pattern RAM: 2 x 1024 = 2KB. Works on stock 64KB 800XL.
  */
 
 #include <stdio.h>
 #include <string.h>
-#include <stdint.h>
-#include <stdlib.h>
-#if defined(__CC65__)
-#include <conio.h>
-#include <atari.h>
-#include "bank.h"
-#endif
 #include "mod_format.h"
-#include "modplayer.h"
+#include "mod_loader.h"
+#include "mod_struct.h"
 #include "pokeymax.h"
 #include "pokeymax_hw.h"
 #include "adpcm.h"
+#include "cio_file.h"
 
-#define PAT_BYTES   (MOD_ROWS_PER_PAT * MOD_CHANNELS * 4)   /* 1024 */
-#define PATTERN_RAM_CACHE_THRESHOLD_BYTES (16u * 1024u)
+// TODO remove all printf
 
-#define BANK_WINDOW_SIZE 0x4000u
 #define SECTOR_SIZE 256
 
-#pragma bss-name(push, "LOWBSS")
-static uint8_t pat_buf_a[PAT_BYTES];
-static uint8_t pat_buf_b[PAT_BYTES];
-#pragma bss-name(pop)
-
-static uint8_t *pat_current    = pat_buf_a;
-static uint8_t *pat_next       = pat_buf_b;
-static uint8_t  pat_current_num = 0xFF;
-static uint8_t  pat_next_num    = 0xFF;
-
-uint8_t mod_need_prefetch = 0;   /* main loop polls this */
-
-static FILE    *mod_file            = NULL;
-static uint32_t pattern_data_offset = 0;
-static uint8_t *pattern_ram_cache = NULL;
-static uint16_t pattern_ram_cache_size = 0;
-static uint32_t pattern_bank_cache_size = 0;
-
-#if defined(__CC65__)
-static uint8_t pattern_bank_first = 0u;
-static uint8_t pattern_bank_count = 0u;
-#endif
-
-/* Minimal pluggable fetch backend (Step A): default = disk fetch) */
-typedef uint8_t (*PatternFetchFn)(uint8_t pattern_num, uint8_t *dst);
-static uint8_t disk_fetch_pattern(uint8_t pattern_num, uint8_t *dst);
-static uint8_t ram_fetch_pattern(uint8_t pattern_num, uint8_t *dst);
-static uint8_t bank_fetch_pattern(uint8_t pattern_num, uint8_t *dst);
-static PatternFetchFn s_fetch_pattern = disk_fetch_pattern;
-
-/* Chunked prefetch state (256-byte slices to shorten SIO stalls) */
-static uint8_t  prefetch_seek_done = 0;
-static uint16_t prefetch_bytes_done = 0;
+static uint8_t mod_file_open = 0;
 
 #pragma bss-name(push, "LOWBSS")
 static uint8_t sector_buf[SECTOR_SIZE];
@@ -78,223 +26,17 @@ static uint8_t adpcm_out[SECTOR_SIZE / 2];
 
 uint8_t mod_row_buf[MOD_CHANNELS * 4];
 
-typedef struct {
-#if defined(__CC65__)
-    uint8_t  base_row;
-    uint16_t sample_index;
-    uint16_t total_samples;
-    uint16_t sample_len;
-    uint32_t source_loaded;
-    uint32_t source_total;
-    uint32_t stored_loaded;
-    uint8_t  is_adpcm;
-    uint8_t  downsample_factor;
-    uint8_t  skipped;
-    char     sample_name[23];
-#endif
-} LoadProgressUI;
 
-#if defined(__CC65__)
-static uint8_t pct_u8(uint32_t part, uint32_t total)
-{
-    if (total == 0u) return 100u;
-    if (part >= total) return 100u;
-    return (uint8_t)((part * 100u) / total);
-}
-#endif
-
-static void load_progress_begin_default(void *ctx, uint32_t source_total)
-{
-    LoadProgressUI *ui = (LoadProgressUI*)ctx;
-#if defined(__CC65__)
-    ui->base_row      = wherey();
-    ui->sample_index  = 0xFFFFu;
-    ui->total_samples = 0xFFFFu;
-    ui->sample_len    = 0xFFFFu;
-    ui->source_loaded = 0xFFFFFFFFUL;
-    ui->source_total  = 0xFFFFFFFFUL;
-    ui->stored_loaded = 0xFFFFFFFFUL;
-    ui->is_adpcm      = 0xFFu;
-    ui->downsample_factor = 0xFFu;
-    ui->skipped       = 0xFFu;
-    ui->sample_name[0]= 0;
-
-    printf("Load 00/00   0%%\n");
-    printf("Name: %-22.22s\n", "");
-    printf("Fmt:-----/- Len:00000 St:-------\n");
-    printf("Src:%8lu/%8lu\n", 0UL, (unsigned long)source_total);
-    printf("Dst:00000000/%8lu\n",(unsigned long)POKEYMAX_RAM_SIZE);
-    ui->source_total = source_total;
-    fflush(stdout);
-#else
-    (void)ui;
-    printf("\r[ 0/ 0] %-22.22s  %-5s  len:%5u  src:%9lu/%9lu  dst:%9lu  %-7s   ",
-           "",
-           "",
-           0u,
-           0UL,
-           (unsigned long)source_total,
-           0UL,
-           "");
-    fflush(stdout);
-#endif
-}
-
-static void load_progress_update_default(void *ctx,
-                                         const SampleInfo *si,
-                                         uint16_t sample_index,
-                                         uint16_t total_samples,
-                                         uint32_t source_loaded,
-                                         uint32_t source_total,
-                                         uint32_t stored_loaded,
-                                         uint8_t skipped)
-{
-    LoadProgressUI *ui = (LoadProgressUI*)ctx;
-#if defined(__CC65__)
-    const char *name = si->name[0] ? si->name : "(unnamed)";
-    const char *fmt  = si->is_adpcm ? "ADPCM" : "PCM";
-    const char *st   = skipped ? "SKIPPED" : "OK";
-    uint8_t pct      = pct_u8(source_loaded, source_total);
-
-    if (sample_index != ui->sample_index || total_samples != ui->total_samples) {
-        gotoxy(5, ui->base_row);
-        printf("%2u/%2u", (unsigned)sample_index, (unsigned)total_samples);
-        ui->sample_index  = sample_index;
-        ui->total_samples = total_samples;
-    }
-
-    if (source_loaded != ui->source_loaded || source_total != ui->source_total) {
-        gotoxy(11, ui->base_row);
-        printf("%3u%%", (unsigned)pct);
-    }
-
-    if (strncmp(name, ui->sample_name, 22u) != 0) {
-        gotoxy(6, ui->base_row + 1u);
-        printf("%-22.22s", name);
-        strncpy(ui->sample_name, name, 22u);
-        ui->sample_name[22] = 0;
-    }
-
-    if (si->is_adpcm != ui->is_adpcm) {
-        gotoxy(4, ui->base_row + 2u);
-        printf("%-5s", fmt);
-        ui->is_adpcm = si->is_adpcm;
-    }
-
-    if (si->downsample_factor != ui->downsample_factor) {
-        gotoxy(10, ui->base_row + 2u);
-        printf("%1d", si->downsample_factor);
-        ui->downsample_factor = si->downsample_factor;
-    }
-
-    if (si->length != ui->sample_len) {
-        gotoxy(16, ui->base_row + 2u);
-        printf("%5u", (unsigned)si->length);
-        ui->sample_len = si->length;
-    }
-
-    if (skipped != ui->skipped) {
-        gotoxy(25, ui->base_row + 2u);
-        printf("%-7s", st);
-        ui->skipped = skipped;
-    }
-
-    if (source_loaded != ui->source_loaded) {
-        gotoxy(4, ui->base_row + 3u);
-        printf("%8lu", (unsigned long)source_loaded);
-        ui->source_loaded = source_loaded;
-    }
-
-    if (source_total != ui->source_total) {
-        gotoxy(13, ui->base_row + 3u);
-        printf("%8lu", (unsigned long)source_total);
-        ui->source_total = source_total;
-    }
-
-    if (stored_loaded != ui->stored_loaded) {
-        gotoxy(4, ui->base_row + 4u);
-        printf("%8lu", (unsigned long)stored_loaded);
-        ui->stored_loaded = stored_loaded;
-    }
-
-    fflush(stdout);
-#else
-    (void)ui;
-    printf("\r[%2u/%2u] %-22.22s  %-5s  len:%5u  src:%9lu/%9lu  dst:%9lu  %-7s   ",
-           (unsigned)sample_index,
-           (unsigned)total_samples,
-           si->name[0] ? si->name : "(unnamed)",
-           si->is_adpcm ? "ADPCM" : "PCM",
-           (unsigned)si->length,
-           (unsigned long)source_loaded,
-           (unsigned long)source_total,
-           (unsigned long)stored_loaded,
-           skipped ? "SKIPPED" : "OK");
-    fflush(stdout);
-#endif
-}
-
-static void load_progress_end_default(void *ctx)
-{
-    LoadProgressUI *ui = (LoadProgressUI*)ctx;
-#if defined(__CC65__)
-    gotoxy(0, ui->base_row + 5u);
-#else
-    (void)ui;
-    printf("\n");
-#endif
-    fflush(stdout);
-}
-
-static LoadProgressUI s_default_progress_ctx;
-const ModLoadProgressPlugin mod_default_load_progress_plugin = {
-    load_progress_begin_default,
-    load_progress_update_default,
-    load_progress_end_default,
-    &s_default_progress_ctx
-};
-
-static const ModLoadProgressPlugin *s_progress_plugin = &mod_default_load_progress_plugin;
+static const ModLoadProgressPlugin *s_progress_plugin = 0;
 
 static uint16_t read_be16(const uint8_t *p)
 {
     return ((uint16_t)p[0] << 8) | p[1];
 }
 
-#if defined(__CC65__)
-static uint8_t bank_portb_for(uint8_t bank)
-{
-    return (uint8_t)((PIA.portb & 0xc3u) | (bank<<2));
-}
-#endif
-
 void mod_file_close(void)
 {
-    if (mod_file) { fclose(mod_file); mod_file = NULL; }
-    if (pattern_ram_cache) {
-        free(pattern_ram_cache);
-        pattern_ram_cache = NULL;
-        pattern_ram_cache_size = 0;
-    }
-    pattern_bank_cache_size = 0;
-}
-
-void mod_set_pattern_fetch_fn(uint8_t (*fetch_fn)(uint8_t pattern_num, uint8_t *dst))
-{
-    s_fetch_pattern = fetch_fn ? fetch_fn : disk_fetch_pattern;
-    prefetch_seek_done = 0;
-    prefetch_bytes_done = 0;
-}
-
-void mod_set_pattern_bank_range(uint8_t first_bank, uint8_t bank_count)
-{
-#if defined(__CC65__)
-    pattern_bank_first = first_bank;
-    pattern_bank_count = bank_count;
-#else
-    (void)first_bank;
-    (void)bank_count;
-#endif
+    if (mod_file_open) { cio_close(); mod_file_open = 0; }
 }
 
 void mod_set_load_progress_plugin(const ModLoadProgressPlugin *plugin)
@@ -302,159 +44,6 @@ void mod_set_load_progress_plugin(const ModLoadProgressPlugin *plugin)
     s_progress_plugin = plugin;
 }
 
-/* -------------------------------------------------------
- * mod_read_row() - called from VBI, NO disk I/O
- * ------------------------------------------------------- */
-uint8_t mod_read_row(uint8_t pattern, uint8_t row)
-{
-    uint16_t offset = (uint16_t)row * (MOD_CHANNELS * 4u);
-
-    if (pattern == pat_current_num) {
-        memcpy(mod_row_buf, pat_current + offset, MOD_CHANNELS * 4);
-        return 0;
-    }
-    if (pattern == pat_next_num) {
-        memcpy(mod_row_buf, pat_next + offset, MOD_CHANNELS * 4);
-        return 0;
-    }
-    return 1;   /* not buffered - prefetch didn't complete in time */
-}
-
-uint8_t mod_get_row_ptr(uint8_t pattern, uint8_t row, const uint8_t **row_ptr)
-{
-    uint16_t offset = (uint16_t)row * (MOD_CHANNELS * 4u);
-
-    if (pattern == pat_current_num) {
-        *row_ptr = pat_current + offset;
-        return 0;
-    }
-    if (pattern == pat_next_num) {
-        *row_ptr = pat_next + offset;
-        return 0;
-    }
-
-    *row_ptr = 0;
-    return 1;
-}
-
-/* -------------------------------------------------------
- * mod_pattern_advance() - called from VBI when order advances
- * Flips buffers, requests next prefetch. NO disk I/O.
- * ------------------------------------------------------- */
-void mod_pattern_advance(uint8_t new_current, uint8_t prefetch_next)
-{
-    uint8_t *tmp;
-
-    if (new_current == pat_next_num) {
-        /* Swap: next becomes current */
-        tmp         = pat_current;
-        pat_current = pat_next;
-        pat_next    = tmp;
-        pat_current_num = new_current;
-        pat_next_num    = 0xFF;
-    }
-
-    if (prefetch_next != 0xFF && prefetch_next != pat_current_num) {
-        pat_next_num      = prefetch_next;
-        mod_need_prefetch = 1;
-    }
-}
-
-static uint8_t disk_fetch_pattern(uint8_t pattern_num, uint8_t *dst)
-{
-    uint32_t offset;
-    uint16_t chunk;
-
-    if (!mod_file) return 1;
-
-    if (!prefetch_seek_done) {
-        offset = pattern_data_offset + (uint32_t)pattern_num * (uint32_t)PAT_BYTES;
-        if (fseek(mod_file, (long)offset, SEEK_SET) != 0) return 1;
-        prefetch_seek_done = 1;
-        prefetch_bytes_done = 0;
-    }
-
-    if (prefetch_bytes_done >= PAT_BYTES) return 0;
-
-    chunk = (uint16_t)(PAT_BYTES - prefetch_bytes_done);
-    if (chunk > 256u) chunk = 256u;
-
-    if (fread(dst + prefetch_bytes_done, 1, chunk, mod_file) != chunk) return 1;
-    prefetch_bytes_done = (uint16_t)(prefetch_bytes_done + chunk);
-
-    return (prefetch_bytes_done >= PAT_BYTES) ? 0 : 2;
-}
-
-static uint8_t ram_fetch_pattern(uint8_t pattern_num, uint8_t *dst)
-{
-    uint32_t offset;
-
-    if (!pattern_ram_cache) return 1;
-
-    offset = (uint32_t)pattern_num * (uint32_t)PAT_BYTES;
-    if (offset + (uint32_t)PAT_BYTES > (uint32_t)pattern_ram_cache_size) return 1;
-
-    memcpy(dst, pattern_ram_cache + offset, PAT_BYTES);
-    return 0;
-}
-
-static uint8_t bank_fetch_pattern(uint8_t pattern_num, uint8_t *dst)
-{
-#if defined(__CC65__)
-    uint32_t offset;
-    uint16_t bank_offset;
-    uint8_t  bank_rel;
-
-    offset = (uint32_t)pattern_num * (uint32_t)PAT_BYTES;
-    if (offset + (uint32_t)PAT_BYTES > pattern_bank_cache_size) return 1;
-
-    bank_rel = (uint8_t)(offset >> 14);
-    if (bank_rel >= pattern_bank_count) return 1;
-    bank_offset = (uint16_t)(offset & (BANK_WINDOW_SIZE - 1u));
-
-    bank_copy_from_window(dst, bank_offset, bank_portb_for((uint8_t)(pattern_bank_first + bank_rel)));
-    return 0;
-#else
-    (void)pattern_num;
-    (void)dst;
-    return 1;
-#endif
-}
-
-/* -------------------------------------------------------
- * mod_prefetch_next_pattern() - called from MAIN LOOP only
- * Reads pat_next_num from disk into pat_next buffer.
- * ------------------------------------------------------- */
-uint8_t mod_prefetch_next_pattern(void)
-{
-    uint8_t rc;
-
-    if (!mod_need_prefetch)   return 0;
-    if (pat_next_num == 0xFF) {
-        mod_need_prefetch = 0;
-        prefetch_seek_done = 0;
-        prefetch_bytes_done = 0;
-        return 0;
-    }
-
-    rc = s_fetch_pattern(pat_next_num, pat_next);
-    if (rc == 0u) {
-        mod_need_prefetch = 0;
-        prefetch_seek_done = 0;
-        prefetch_bytes_done = 0;
-        return 0;
-    }
-
-    if (rc == 2u) {
-        /* partial progress; keep mod_need_prefetch set */
-        return 0;
-    }
-
-    /* error: reset partial state so a later retry restarts cleanly */
-    prefetch_seek_done = 0;
-    prefetch_bytes_done = 0;
-    return 1;
-}
 
 /* -------------------------------------------------------
  * mod_load()
@@ -475,62 +64,48 @@ uint8_t mod_load(const char *filename)
     uint8_t  had_status_output;
 
     uint32_t sample_data_offset;
-    uint32_t pattern_data_size;
 
     memset(&mod, 0, sizeof(mod));
-    pat_current_num   = 0xFF;
-    pat_next_num      = 0xFF;
-    mod_need_prefetch = 0;
 
-    if (pattern_ram_cache) {
-        free(pattern_ram_cache);
-        pattern_ram_cache = NULL;
-        pattern_ram_cache_size = 0;
-    }
-    pattern_bank_cache_size = 0;
-    s_fetch_pattern = disk_fetch_pattern;
+    strncpy(mod.filename, filename, 64);
 
-    if (mod_file) { fclose(mod_file); mod_file = NULL; }
-    mod_file = fopen(filename, "rb");
-    if (!mod_file) return 1;
+    mod_file_close();
+    mod_file_open = cio_open(filename)==0;
+    if (!mod_file_open) return 1;
 
-    if (fread(title, 1, 20, mod_file) != 20) return 1;
+    if (cio_read(title, 20) != 20) return 1;
     (void)title;
 
     total_sample_bytes = 0;
     total_samples_to_load = 0;
     for (i = 1; i <= MOD_MAX_SAMPLES; i++) {
         SampleInfo *si = &mod.samples[i];
-        uint8_t j;
-        if (fread(hdr_buf, 1, 30, mod_file) != 30) return 1;
-        for (j = 0; j < MOD_SAMPLE_NAME_LEN; j++) {
-            uint8_t c = hdr_buf[j];
-            if (c == 0u) break;
-            if (c < 32u || c > 126u) c = '.';
-            si->name[j] = (char)c;
-        }
-        while (j < MOD_SAMPLE_NAME_LEN) si->name[j++] = 0;
-        si->name[MOD_SAMPLE_NAME_LEN] = 0;
+        if (cio_read(hdr_buf, 30) != 30) return 1;
         si->length     = read_be16(hdr_buf + 22) * 2u;
-        si->finetune   = (int8_t)(hdr_buf[24] & 0x0Fu);
-        if (si->finetune > 7) si->finetune -= 16;
+        {
+            uint8_t ft_raw = hdr_buf[24] & 0x0Fu;  /* 0..15, where 8..15 = -8..-1 */
+            si->flags = (uint8_t)(ft_raw << 4);
+        }
         si->volume     = (hdr_buf[25] > 64u) ? 64u : hdr_buf[25];
         si->loop_start = read_be16(hdr_buf + 26) * 2u;
         si->loop_len   = read_be16(hdr_buf + 28) * 2u;
-        si->has_loop   = (si->loop_len > 2u) ? 1u : 0u;
-        if (si->has_loop && (si->loop_start + si->loop_len) > si->length)
-            si->loop_len = si->length - si->loop_start;
+        {
+            uint8_t has_loop = (si->loop_len > 2u) ? 1u : 0u;
+            if (has_loop && (si->loop_start + si->loop_len) > si->length)
+                si->loop_len = si->length - si->loop_start;
+            si->flags = (si->flags & 0xFCu) | (has_loop ? SI_STYPE_PCM_LOOP : SI_STYPE_PCM);
+        }	
         if (si->length > 0u) {
             total_sample_bytes += si->length;
             total_samples_to_load++;
         }
     }
 
-    if (fread(two, 1, 2, mod_file) != 2) return 1;
+    if (cio_read(two, 2) != 2) return 1;
     mod.song_length = two[0];
 
-    if (fread(mod.order_table, 1, MOD_MAX_PATTERNS, mod_file) != MOD_MAX_PATTERNS) return 1;
-    if (fread(magic, 1, 4, mod_file) != 4) return 1;
+    if (cio_read(mod.order_table, MOD_MAX_PATTERNS) != MOD_MAX_PATTERNS) return 1;
+    if (cio_read(magic, 4) != 4) return 1;
     (void)magic;
 
     mod.num_patterns = 0;
@@ -539,80 +114,9 @@ uint8_t mod_load(const char *filename)
             mod.num_patterns = mod.order_table[i];
     mod.num_patterns++;
 
-    pattern_data_offset = (uint32_t)ftell(mod_file);
-    pattern_data_size = (uint32_t)mod.num_patterns * (uint32_t)PAT_BYTES;
-
-    if (pattern_data_size > 0u &&
-        pattern_data_size <= (uint32_t)PATTERN_RAM_CACHE_THRESHOLD_BYTES) {
-        pattern_ram_cache = (uint8_t*)malloc((size_t)pattern_data_size);
-        if (pattern_ram_cache) {
-            pattern_ram_cache_size = (uint16_t)pattern_data_size;
-            if (fread(pattern_ram_cache, 1u, (size_t)pattern_data_size, mod_file)
-                == (size_t)pattern_data_size) {
-                s_fetch_pattern = ram_fetch_pattern;
-            } else {
-                free(pattern_ram_cache);
-                pattern_ram_cache = NULL;
-                pattern_ram_cache_size = 0;
-                if (fseek(mod_file, (long)pattern_data_offset, SEEK_SET) != 0) return 1;
-            }
-        }
-    }
-
-#if defined(__CC65__)
-    if (s_fetch_pattern == disk_fetch_pattern &&
-        pattern_data_size > 0u &&
-        pattern_bank_count > 0u) {
-        uint8_t required_banks = (uint8_t)((pattern_data_size + (BANK_WINDOW_SIZE - 1u)) >> 14);
-        if (required_banks <= pattern_bank_count) {
-            uint8_t bank_i;
-            uint32_t remaining = pattern_data_size;
-            uint8_t bank_load_ok = 1u;
-
-            for (bank_i = 0u; bank_i < required_banks; bank_i++) {
-                uint16_t bank_bytes = (remaining > BANK_WINDOW_SIZE) ? BANK_WINDOW_SIZE : (uint16_t)remaining;
-                uint16_t bank_off = 0u;
-
-                while (bank_off < bank_bytes) {
-                    uint16_t chunk = (uint16_t)(bank_bytes - bank_off);
-                    if (chunk > SECTOR_SIZE) chunk = SECTOR_SIZE;
-
-                    /* Keep normal PORTB mapping during disk I/O (CIO/fread). */
-                    if (fread(sector_buf, 1u, chunk, mod_file) != chunk) {
-                        bank_load_ok = 0u;
-                        break;
-                    }
-
-                    bank_copy_to_window(
-                        bank_off,
-                        sector_buf,
-                        chunk,
-                        bank_portb_for((uint8_t)(pattern_bank_first + bank_i))
-                    );
-
-                    bank_off = (uint16_t)(bank_off + chunk);
-                }
-
-                if (!bank_load_ok) break;
-                remaining -= (uint32_t)bank_bytes;
-            }
-
-            if (bank_load_ok) {
-                pattern_bank_cache_size = pattern_data_size;
-                s_fetch_pattern = bank_fetch_pattern;
-            } else if (fseek(mod_file, (long)pattern_data_offset, SEEK_SET) != 0) {
-                return 1;
-            }
-        }
-    }
-#endif
-
-    if (s_fetch_pattern==ram_fetch_pattern)
-        printf("Using RAM for patterns\n");
-    else if (s_fetch_pattern==bank_fetch_pattern)
-        printf("Using banked RAM for patterns\n");
-    else
-        printf("Streaming patterns of size %ld\n",pattern_data_size);
+    mod.pattern_data_offset = cio_tell();
+    cio_note(&mod.pattern_bookmark);  // save position for pattern loader
+    mod.pattern_data_size = (uint32_t)mod.num_patterns * (uint32_t)PAT_BYTES;
 
     /* ------------------------------------------------------------------
      * PASS 1: Plan compression and downsampling from header data only.
@@ -647,9 +151,10 @@ uint8_t mod_load(const char *filename)
 
         for (j = 1u; j <= MOD_MAX_SAMPLES; j++) {
             SampleInfo *si = &mod.samples[j];
-            si->downsample_factor = 1u;
-            si->is_adpcm = 0u;
-            si->is_8bit  = 1u;
+	    /* Preserve header-derived finetune (bits 7:4) and sample type/loop (bits 1:0).
+             * Pass 1 should only reset downsample planning (bits 3:2).
+             */
+            si->flags &= (uint8_t)~0x0Cu;
             if (si->length == 0u) continue;
             needed += (uint32_t)si->length;
         }
@@ -659,12 +164,11 @@ uint8_t mod_load(const char *filename)
             for (j = 1u; j <= MOD_MAX_SAMPLES; j++) {
                 SampleInfo *si = &mod.samples[j];
                 if (si->length == 0u) continue;
-                if (si->length > 512u && !si->has_loop) {
+                if (si->length > 512u && !SI_HAS_LOOP(si)) {
                     uint32_t old_cost = (uint32_t)si->length;
                     uint32_t new_cost = ((uint32_t)si->length + 1u) / 2u;
                     needed = needed - old_cost + new_cost;
-                    si->is_adpcm = 1u;
-                    si->is_8bit  = 0u;
+                    si->flags = (si->flags & ~0x03u) | SI_STYPE_ADPCM;		    
                 }
             }
         }
@@ -698,8 +202,8 @@ uint8_t mod_load(const char *filename)
                 k = ncand;
                 while (k > 0u) {
                     SampleInfo *sk = &mod.samples[cand[k - 1u]];
-                    uint8_t sk_looped_pcm = (sk->has_loop && !sk->is_adpcm) ? 1u : 0u;
-                    uint8_t sj_looped_pcm = (sj->has_loop && !sj->is_adpcm) ? 1u : 0u;
+                    uint8_t sk_looped_pcm = (SI_HAS_LOOP(sk) && !SI_IS_ADPCM(sk)) ? 1u : 0u;
+                    uint8_t sj_looped_pcm = (SI_HAS_LOOP(sj) && !SI_IS_ADPCM(sj)) ? 1u : 0u;
                     uint8_t sk_wins = 0u;
                     if (sk_looped_pcm && !sj_looped_pcm) sk_wins = 1u;
                     else if (sk_looped_pcm == sj_looped_pcm && sk->length >= sj->length) sk_wins = 1u;
@@ -716,14 +220,17 @@ uint8_t mod_load(const char *filename)
                 for (c = 0u; c < ncand && needed > (uint32_t)POKEYMAX_RAM_SIZE; c++) {
                     SampleInfo *sc = &mod.samples[cand[c]];
                     uint8_t target_factor = (uint8_t)(pass == 1u ? 2u : pass == 2u ? 4u : 8u);
+                    uint8_t ds_shift = SI_DS_SHIFT(sc);
+                    uint8_t ds_factor = (uint8_t)(1u << ds_shift);  /* 1, 2, 4, or 8 */
 
-                    if (sc->downsample_factor >= target_factor) continue;
+                    if (ds_factor >= target_factor) continue;
 
                     {
-                        uint32_t ds_old = (uint32_t)sc->downsample_factor;
+                        uint32_t ds_old = (uint32_t)ds_factor;
                         uint32_t ds_new = (uint32_t)target_factor;
                         uint32_t old_cost, new_cost;
-                        if (sc->is_adpcm) {
+                        uint8_t ds_shift;
+                        if (SI_IS_ADPCM(sc)) {
                             old_cost = ((uint32_t)sc->length / ds_old + 1u) / 2u;
                             new_cost = ((uint32_t)sc->length / ds_new + 1u) / 2u;
                         } else {
@@ -731,7 +238,9 @@ uint8_t mod_load(const char *filename)
                             new_cost = (uint32_t)sc->length / ds_new;
                         }
                         needed = needed - old_cost + new_cost;
-                        sc->downsample_factor = target_factor;
+                        // target_factor is 2, 4, or 8 — convert to shift
+                        ds_shift = (target_factor == 2u) ? 1u : (target_factor == 4u) ? 2u : 3u;
+                        sc->flags = (sc->flags & ~0x0Cu) | (uint8_t)(ds_shift << 2);			
                     }
                 }
             }
@@ -764,15 +273,13 @@ uint8_t mod_load(const char *filename)
             uint8_t fi;
             SampleInfo *si = &mod.samples[j];
             if (si->length == 0u) continue;
-            fi = (si->downsample_factor == 8u) ? 3u :
-                         (si->downsample_factor == 4u) ? 2u :
-                         (si->downsample_factor == 2u) ? 1u : 0u;
-            if (si->is_adpcm) {
+            fi = SI_DS_SHIFT(si);
+            if (SI_IS_ADPCM(si)) {
                 na[fi]++;
-                abytes += ((uint32_t)si->length / (uint32_t)si->downsample_factor + 1u) / 2u;
+		abytes += ((uint32_t)(si->length >> fi) + 1u) / 2u;
             } else {
                 np[fi]++;
-                pbytes += (uint32_t)si->length / (uint32_t)si->downsample_factor;
+                pbytes += (uint32_t)si->length >> fi;
             }
         }
         printf("ADPCM/ 2:%u 4:%u 8:%u 16:%u =%lub\n",
@@ -793,9 +300,9 @@ uint8_t mod_load(const char *filename)
         }
     }
 
-    sample_data_offset = pattern_data_offset
-                       + pattern_data_size;
-    if (fseek(mod_file, (long)sample_data_offset, SEEK_SET) != 0) return 1;
+    sample_data_offset = mod.pattern_data_offset
+                       + mod.pattern_data_size;
+    cio_seek(mod.filename, sample_data_offset, SEEK_SET, &mod.pattern_bookmark);
 
     pokeymax_init();
     loaded_samples      = 0;
@@ -809,6 +316,8 @@ uint8_t mod_load(const char *filename)
         SampleInfo *si = &mod.samples[i];
         uint16_t    ram_addr, ram_needed;
         uint16_t    remaining, chunk, written, out_len;
+        uint8_t ds_shift;
+        uint8_t ds_factor;
         ADPCMState  adpcm_state;
 
         if (si->length == 0u) continue;
@@ -823,11 +332,12 @@ uint8_t mod_load(const char *filename)
 
         /* Compression plan already set by Pass 1 (is_adpcm, is_8bit,
          * downsample_factor).  Just compute ram_needed from it. */
-        if (si->is_adpcm) {
-            ram_needed = (si->length / (uint16_t)si->downsample_factor + 1u) / 2u;
+        ds_shift = SI_DS_SHIFT(si);
+        ds_factor = (uint8_t)(1u << ds_shift);  /* 1, 2, 4, or 8 */
+        if (SI_IS_ADPCM(si)) {
+            ram_needed = ((si->length >> ds_shift) + 1u) / 2u;
         } else {
-            ram_needed = (si->length + (uint16_t)si->downsample_factor - 1u)
-                         / (uint16_t)si->downsample_factor;
+            ram_needed = (si->length + (uint16_t)((1u << ds_shift) - 1u)) >> ds_shift;
         }
 
         ram_addr = pokeymax_alloc(ram_needed);
@@ -844,7 +354,7 @@ uint8_t mod_load(const char *filename)
                                           1u);
             }
             had_status_output = 1;
-            fseek(mod_file, (long)si->length, SEEK_CUR);
+            cio_seek(mod.filename, (uint32_t)si->length, SEEK_CUR, NULL);
             si->length = 0;
             continue;
         }
@@ -853,10 +363,10 @@ uint8_t mod_load(const char *filename)
         si->pokeymax_len  = ram_needed;
 
         /* Adjust loop points for downsampled samples */
-        if (si->downsample_factor > 1u) {
-            si->loop_start = si->loop_start / si->downsample_factor;
-            si->loop_len   = si->loop_len   / si->downsample_factor;
-            if (si->loop_len < 2u && si->has_loop) si->loop_len = 2u;
+        if (ds_shift > 0u) {
+            si->loop_start >>= ds_shift;
+            si->loop_len   >>= ds_shift;
+            if (si->loop_len < 2u && SI_HAS_LOOP(si)) si->loop_len = 2u;
         }
 
         adpcm_state.predictor  = 0;
@@ -866,8 +376,8 @@ uint8_t mod_load(const char *filename)
 
         while (remaining > 0u) {
             chunk = (remaining > SECTOR_SIZE) ? SECTOR_SIZE : remaining;
-            if (fread(sector_buf, 1, chunk, mod_file) != chunk) return 1;
-            if (si->is_adpcm) {
+            if (cio_read(sector_buf, chunk) != chunk) return 1;
+            if (SI_IS_ADPCM(si)) {
                 /* Optionally downsample first, then ADPCM encode.
                  * adpcm_out (128B) holds the decimated PCM intermediate.
                  * enc_buf   (128B) holds the final ADPCM output.
@@ -875,11 +385,23 @@ uint8_t mod_load(const char *filename)
                 static uint8_t enc_buf[SECTOR_SIZE / 2];
                 const int8_t *src_ptr;
                 uint16_t      src_len;
-                if (si->downsample_factor > 1u) {
+                if (ds_factor > 1u) {
+                    /* Anti-alias filtered downsample: average N consecutive
+                     * samples instead of just picking every Nth.
+                     * Suppresses aliasing from frequencies above the new
+                     * Nyquist.  Uses >> ds_shift instead of / factor
+                     * (ds_shift is log2(factor): 1,2,3 for 2x,4x,8x).
+                     * Cost: one int16_t accumulate per source sample —
+                     * cheap on 6502 during load (not VBI). */
                     uint16_t k, di = 0u;
-                    uint8_t  factor = si->downsample_factor;
-                    for (k = 0u; k < chunk; k += factor)
-                        adpcm_out[di++] = sector_buf[k];
+                    uint8_t  factor = ds_factor;
+                    for (k = 0u; k + factor <= chunk; k += factor) {
+                        int16_t acc = 0;
+                        uint8_t m;
+                        for (m = 0u; m < factor; m++)
+                            acc += (int8_t)sector_buf[k + m];
+                        adpcm_out[di++] = (uint8_t)(int8_t)(acc >> ds_shift);
+                    }
                     src_ptr = (const int8_t*)adpcm_out;
                     src_len = di;
                 } else {
@@ -890,12 +412,16 @@ uint8_t mod_load(const char *filename)
                                              enc_buf, &adpcm_state);
                 pokeymax_write_ram(ram_addr + written, enc_buf, out_len);
                 written += out_len;
-            } else if (si->downsample_factor > 1u) {
-                /* Downsample: pick every Nth byte into adpcm_out (reuse as temp buf) */
+            } else if (ds_factor > 1u) {
+                /* Anti-alias filtered downsample for PCM: average N samples */
                 uint16_t k, out_idx = 0;
-                uint8_t  factor = si->downsample_factor;
-                for (k = 0u; k < chunk; k += factor) {
-                    adpcm_out[out_idx++] = sector_buf[k];
+                uint8_t  factor = ds_factor;
+                for (k = 0u; k + factor <= chunk; k += factor) {
+                    int16_t acc = 0;
+                    uint8_t m;
+                    for (m = 0u; m < factor; m++)
+                        acc += (int8_t)sector_buf[k + m];
+                    adpcm_out[out_idx++] = (uint8_t)(int8_t)(acc >> ds_shift);
                 }
                 pokeymax_write_ram(ram_addr + written, adpcm_out, out_idx);
                 written += out_idx;
@@ -934,32 +460,7 @@ uint8_t mod_load(const char *filename)
         }
     }
 
-    if (mod_file) { fclose(mod_file); mod_file = NULL; }
-    mod_file = fopen(filename, "rb");
-
-    /* Pre-load pattern for order 0 into current buffer (blocking via fetch backend) */
-    {
-        uint8_t rc;
-        do {
-            rc = s_fetch_pattern(mod.order_table[0], pat_current);
-        } while (rc == 2u);
-        if (rc != 0u) return 1;
-        prefetch_seek_done = 0;
-        prefetch_bytes_done = 0;
-        pat_current_num = mod.order_table[0];
-    }
-
-    /* Pre-load pattern for order 1 into next buffer (blocking via fetch backend) */
-    if (mod.song_length > 1u) {
-        uint8_t rc;
-        do {
-            rc = s_fetch_pattern(mod.order_table[1], pat_next);
-        } while (rc == 2u);
-        if (rc != 0u) return 1;
-        prefetch_seek_done = 0;
-        prefetch_bytes_done = 0;
-        pat_next_num = mod.order_table[1];
-    }
+    mod_file_close();
 
     mod.order_pos     = 0;
     mod.row           = 0;
