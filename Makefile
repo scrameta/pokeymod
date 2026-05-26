@@ -21,7 +21,7 @@ ASFLAGS = -t $(TARGET)
 SHARED_C = src/pokeymax_hw.c src/adpcm.c
 
 # --- Main loader and player ---
-LOADER_C = src/mod_pattern_bank.c src/mod_loader.c src/app_loader.c src/mod.c src/mod_default_progress_plugin.c src/mod_pattern_bank_loader.c src/cio_file.c src/cio_call.s src/sdx_path.c \
+LOADER_C = src/mod_loader.c src/app_loader.c src/mod.c src/mod_default_progress_plugin.c src/mod_pattern_bank_loader.c src/cio_file.c src/cio_call.s src/sdx_path.c \
            $(SHARED_C)
 LOADER_S = src/memcpy_banked.s
 
@@ -50,11 +50,9 @@ TEST11_C = tests/test11_row0_decode.c src/pokeymax_hw.c src/mod_loader.c src/mod
 TEST56_S = src/vbi_handler.s
 TEST56_COMPAT_S = src/loop_handler_irq_compat.s
 
-#all: modplay.xex modplay2.xex modload.xex modply.xex test2.xex test3.xex test3ad.xex test4.xex test5.xex test6.xex test7.xex test8.xex 
-all: modplay.xex modplay2.xex modload.xex modply.xex test2.xex test3.xex test3ad.xex test4.xex test5.xex 
+#all: modplay.xex modload.xex modply.xex test2.xex test3.xex test3ad.xex test4.xex test5.xex test6.xex test7.xex test8.xex 
+all: modplay.xex modload.xex modply.xex test2.xex test3.xex test3ad.xex test4.xex test5.xex 
 .PHONY: all player test2 test3 test3-adpcm test4 test5 test6 test7 test8 test9 test9b test10 test11 test-adpcm-linux clean
-
-player: modplay2.xex
 
 modload.xex: $(LOADER_C) $(LOADER_S)
 	cl65 $(CFLAGSLOAD) -t $(TARGET) -m modload.map \
@@ -70,13 +68,8 @@ modplay.xex: modply.xex modload.xex
 	#./xex-filter.pl -o modplay.xex -i 1,2,3,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,5,6,7,8 -w738=10241,130=0,0,0,0,0,0,0,0,0,0,0,0,0,0 modload.xex modply.xex
 	#./xex-filter.pl -o modplay.xex -i 1,2,3,9,7,8 -w738=10241,130=0,0,0,0,0,0,0,0,0,0,0,0,0,0 modload.xex modply.xex
 	#./xex-filter.pl -o modplay.xex -i 1,2,3,9,5,6,7,8 -w738=9217 modload.xex modply.xex
-	./xex-filter.pl -o modplay.xex -i 1,2,3,9,7,8 -w738=7681 modload.xex modply.xex
+	./xex-filter.pl -o modplay.xex -i 1,2,3,9,7,8 -w738=9217 modload.xex modply.xex
 	#cat modload.xex modply.xex > modplay.xex
-
-modplay2.xex: $(LOADER_C) $(LOADER_S)
-	cl65 $(CFLAGSLOAD) -t $(TARGET) -m modplay2.map \
-	     -o modplay2.xex src/all_main.c $(LOADPLAY_C) $(LOADPLAY_S)
-	@echo "Built: modplay2.xex ($$(wc -c < modplay2.xex) bytes)"
 
 test2.xex: $(TEST2_C)
 	cl65 $(CFLAGS) -o test2.xex $(TEST2_C)
