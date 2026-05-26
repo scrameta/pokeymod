@@ -20,6 +20,12 @@ static PIADef PIA;
 static char buffer[1024];
 #pragma bss-name(pop)
 
+//#pragma bss-name(push, "PATTERNBSS")
+//static char pattern_buffer1[4096];
+//static char pattern_buffer2[4096];
+//static char pattern_buffer3[4096];
+//#pragma bss-name(pop)
+
 void load_patterns_to_banks()
 {
     // We need to tell the player where the patterns are and load them maybe
@@ -32,15 +38,29 @@ void load_patterns_to_banks()
     uint8_t i;
     uint8_t f_ok;
     uint32_t pattern_data_pos;
+    uint8_t pattern_base=0;
+    uint8_t * internal_ram_base=0;
 
     // Something stupid to start with
     mod.banks = mod.pattern_data_size>>12;
     if (mod.pattern_data_size&0x0fff) mod.banks+=1;   
 
-    for (i=0;i!=64;++i)
+    /* Bank 0 uses reserved high RAM at $7C00-$8BFF.
+       Remaining banks use the normal 4x4KiB $4000-$7FFF bank window. */
+    mod.pattern_portb[0] = 0xFF;
+    internal_ram_base= 1+ *(uint16_t *)(0xe); //reserved 12k after app
+
+    mod.pattern_bank_addr[0] = internal_ram_base;
+    mod.pattern_portb[1] = 0xFF;
+    mod.pattern_bank_addr[1] = internal_ram_base+4096;
+    mod.pattern_portb[2] = 0xFF;
+    mod.pattern_bank_addr[2] = internal_ram_base+8192;
+    pattern_base = 3;
+    for (i=pattern_base;i<(64+pattern_base);++i)
     {
-        mod.pattern_portb[i] = 0x83 | (i&0xc) |((i&0x30)<<1);
-        mod.pattern_bank_addr[i] = (uint8_t *)(0x4000 + ((i&3)<<12));
+        uint8_t j = (uint8_t)(i - pattern_base);
+        mod.pattern_portb[i] = 0x83 | (j&0x0c) |((j&0x30)<<1);
+        mod.pattern_bank_addr[i] = (uint8_t *)(0x4000 + ((j&0x03)<<12));
     }
 
     // Load the pattern data

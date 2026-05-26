@@ -100,8 +100,8 @@ typedef struct {
 
     /* Where we store the data in ram in 4k chunks: XL banks, under OS or main ram */
     uint8_t  banks;
-    uint8_t  pattern_portb[64];
-    uint8_t * pattern_bank_addr[64];
+    uint8_t  pattern_portb[80];
+    uint8_t * pattern_bank_addr[80];
     uint8_t pattern_row_buf[MOD_CHANNELS*4];
 
     /* Song data */
