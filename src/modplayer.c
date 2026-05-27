@@ -330,13 +330,17 @@ static void trigger_sample(uint8_t hw_chan, ChanState *cs)
     if (cs->period == 0u)       return;
 
     cs->sam_addr   = si->pokeymax_addr;
-    cs->sam_len    = si->length;
     cs->loop_start = si->loop_start;
     cs->loop_len   = si->loop_len;
     cs->has_loop   = SI_HAS_LOOP(si);
     cs->is_adpcm   = SI_IS_ADPCM(si);
     cs->is_8bit    = !SI_IS_ADPCM(si);
     cs->active     = 1u;
+    if (cs->is_adpcm) {
+        cs->sam_len = (uint16_t)(si->length * 2u);
+    } else {
+        cs->sam_len = si->length;
+    }
 
     /* OPT-11: inlined HW setup — avoids 7-param software stack push */
     trigger_setup_hw(hw_chan, cs);
