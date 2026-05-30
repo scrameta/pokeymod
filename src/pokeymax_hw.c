@@ -29,7 +29,7 @@ uint16_t pokeymax_ram_ptr = 0;
 uint8_t pokeymax_samcfg_shadow = 0xF0;
 uint8_t pokeymax_dma_shadow    = 0x00;
 uint8_t pokeymax_irqen_shadow  = 0x00;
-
+uint16_t POKEYMAX_RAM_SIZE;
 
 uint8_t pokeymax_detect(void)
 {
@@ -42,6 +42,11 @@ uint8_t pokeymax_detect(void)
     POKE(REG_CFGUNLOCK, 0x00);
 
     if (!(cap & CAP_SAMPLE)) return 1;
+
+    if (cap & CAP_SAMPLE_64K)
+        POKEYMAX_RAM_SIZE = 65536U ;
+    else
+        POKEYMAX_RAM_SIZE = 43008U; 
     return 2;
 }
 

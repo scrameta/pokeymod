@@ -74,6 +74,7 @@
 #define CAP_COVOX       0x10
 #define CAP_SAMPLE      0x20
 #define CAP_FLASH       0x40
+#define CAP_SAMPLE_64K  0x80
 
 /* REG_SAMCFG bit helpers */
 #define SAMCFG_ADPCM_CH1   0x01
