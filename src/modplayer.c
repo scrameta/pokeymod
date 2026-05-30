@@ -612,15 +612,24 @@ static void decode_commit_channel(uint8_t ch, const uint8_t *d)
 
     switch (ne) {
       case FX_SET_VOLUME:
-        cs->volume=(npar>64u)?64u:npar; cs->hw_vol=scale_volume(cs->volume); hw_upd=1u; break;
+        cs->volume = (npar > 64u) ? 64u : npar;
+        cs->hw_vol = scale_volume(cs->volume);
+        hw_upd = 1u;
+        break;
       case FX_SET_SPEED:
         /* Already handled by tick-0 pre-scan — skip */
         break;
       case FX_VIBRATO:
-        if(npar&0xF0u) cs->vib_speed=(npar>>4)&0x0Fu;
-        if(npar&0x0Fu) cs->vib_depth=npar&0x0Fu; break;
-      case FX_TONE_PORTAMENTO: case FX_TONE_PORTA_VOLSLIDE:
-        if(npar) cs->port_speed=npar; break;
+        /* Protracker 4xy: zero nibble means "keep previous value".
+         * Both nibbles are independent, then we always exit the case. */
+        if (npar & 0xF0u) cs->vib_speed = (npar >> 4) & 0x0Fu;
+        if (npar & 0x0Fu) cs->vib_depth =  npar       & 0x0Fu;
+        break;
+      case FX_TONE_PORTAMENTO:
+      case FX_TONE_PORTA_VOLSLIDE:
+        /* Protracker 3xx/5xx: zero param means "reuse previous speed". */
+        if (npar) cs->port_speed = npar;
+        break;
       case FX_POSITION_JUMP:
         /* Already handled by tick-0 pre-scan — skip */
         break;
@@ -628,25 +637,53 @@ static void decode_commit_channel(uint8_t ch, const uint8_t *d)
         /* Already handled by tick-0 pre-scan — skip */
         break;
       case FX_EXTENDED: {
-        uint8_t sub=(npar>>4)&0x0Fu, subp=npar&0x0Fu;
-        switch(sub) {
-          case EFX_FINE_VOL_UP:   { uint8_t v=cs->volume+subp; cs->volume=(v>64u)?64u:v; cs->hw_vol=scale_volume(cs->volume); hw_upd=1u; break; }
-          case EFX_FINE_VOL_DOWN: if(subp>cs->volume) cs->volume=0u; else cs->volume-=subp; cs->hw_vol=scale_volume(cs->volume); hw_upd=1u; break;
-          case EFX_FINE_SLIDE_UP:   if(cs->period>subp) cs->period-=subp; update_hw_period(cs); hw_upd=1u; break;
-          case EFX_FINE_SLIDE_DOWN: cs->period+=subp; update_hw_period(cs); hw_upd=1u; break;
+        uint8_t sub  = (npar >> 4) & 0x0Fu;
+        uint8_t subp =  npar       & 0x0Fu;
+        switch (sub) {
+          case EFX_FINE_VOL_UP: {
+            uint8_t v = cs->volume + subp;
+            cs->volume = (v > 64u) ? 64u : v;
+            cs->hw_vol = scale_volume(cs->volume);
+            hw_upd = 1u;
+            break;
+          }
+          case EFX_FINE_VOL_DOWN:
+            if (subp > cs->volume) cs->volume  = 0u;
+            else                   cs->volume -= subp;
+            cs->hw_vol = scale_volume(cs->volume);
+            hw_upd = 1u;
+            break;
+          case EFX_FINE_SLIDE_UP:
+            /* Guard against period underflow; leave period unchanged if
+             * subp would drop us below zero (period 0 is invalid). */
+            if (cs->period > subp) cs->period -= subp;
+            update_hw_period(cs);
+            hw_upd = 1u;
+            break;
+          case EFX_FINE_SLIDE_DOWN:
+            cs->period += subp;
+            update_hw_period(cs);
+            hw_upd = 1u;
+            break;
           case EFX_LOOP:
             /* Already handled by tick-0 pre-scan — skip */
             break;
-          case EFX_NOTE_CUT:   cs->note_cut_tick=subp; break;
-          case EFX_NOTE_DELAY: cs->note_delay_ticks=subp; return; /* skip trigger */
+          case EFX_NOTE_CUT:
+            cs->note_cut_tick = subp;
+            break;
+          case EFX_NOTE_DELAY:
+            cs->note_delay_ticks = subp;
+            return; /* skip trigger */
           case EFX_PATTERN_DELAY:
             /* Already handled by tick-0 pre-scan — skip */
             break;
-          default: break;
+          default:
+            break;
         }
         break;
       }
-      default: break;
+      default:
+        break;
     }
 
     if(np && ne!=FX_TONE_PORTAMENTO && ne!=FX_TONE_PORTA_VOLSLIDE) {
