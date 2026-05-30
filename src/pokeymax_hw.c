@@ -29,7 +29,7 @@ uint16_t pokeymax_ram_ptr = 0;
 uint8_t pokeymax_samcfg_shadow = 0xF0;
 uint8_t pokeymax_dma_shadow    = 0x00;
 uint8_t pokeymax_irqen_shadow  = 0x00;
-uint16_t POKEYMAX_RAM_SIZE;
+uint32_t POKEYMAX_RAM_SIZE;
 
 uint8_t pokeymax_detect(void)
 {

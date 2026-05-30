@@ -9,7 +9,7 @@
 #include "pokeymax.h"
 
 #define POKEYMAX_ALLOC_FAIL 0xFFFFU
-extern uint16_t POKEYMAX_RAM_SIZE;
+extern uint32_t POKEYMAX_RAM_SIZE;
 
 extern uint16_t pokeymax_ram_ptr;
 extern uint8_t pokeymax_samcfg_shadow;

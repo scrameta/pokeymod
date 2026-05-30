@@ -61,6 +61,7 @@ void    pokeymax_mock_poke(uint16_t addr, uint8_t val);
 #define CAP_COVOX       0x10
 #define CAP_SAMPLE      0x20
 #define CAP_FLASH       0x40
+#define CAP_SAMPLE_64K  0x80
 
 #define RTCLOK      0x0014U
 #define CH          0x02FCU
