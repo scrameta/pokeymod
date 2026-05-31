@@ -295,8 +295,8 @@ uint8_t mod_load(const char *filename)
             if (total > (uint32_t)POKEYMAX_RAM_SIZE)
                 printf("OVER by %lub!\n",
                        (unsigned long)(total-(uint32_t)POKEYMAX_RAM_SIZE));
-            printf("Total:%lub / %ub\n",
-                   (unsigned long)total,(unsigned)POKEYMAX_RAM_SIZE);
+            printf("Total:%lub / %lub\n",
+                   (unsigned long)total,(uint32_t)POKEYMAX_RAM_SIZE);
         }
     }
 
