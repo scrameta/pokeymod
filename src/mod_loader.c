@@ -159,16 +159,46 @@ uint8_t mod_load(const char *filename)
             needed += (uint32_t)si->length;
         }
 
-        /* Apply ADPCM to eligible samples if we exceed RAM */
+        /* Apply ADPCM to eligible samples if we exceed RAM.
+         *
+         * Looped samples are eligible too: we'll encode them as TWO ADPCM
+         * blocks (attack [0..loop_start), loop body [loop_start..+loop_len)),
+         * each from a fresh predictor state of (0, 0).  The hardware's
+         * IRQ-on-end-of-sample drives syncreset for that channel, which
+         * resets the ADPCM accumulator to (0, 0) on every wrap -- so each
+         * iteration of the loop body decodes bit-identically to the
+         * encoded reference.
+         *
+         * Stored cost:
+         *   non-looped: (length + 1) / 2
+         *   looped:     (loop_start + 1)/2 + (loop_len + 1)/2
+         *
+         * Any source bytes after loop_start+loop_len are discarded -- they
+         * are dead data in a Protracker file (loop wraps before reaching
+         * them).  That actually makes us smaller than the PCM-loop case,
+         * which currently stores the full sample length.
+         */
         if (needed > (uint32_t)POKEYMAX_RAM_SIZE) {
             for (j = 1u; j <= MOD_MAX_SAMPLES; j++) {
                 SampleInfo *si = &mod.samples[j];
                 if (si->length == 0u) continue;
-                if (si->length > 512u && !SI_HAS_LOOP(si)) {
+                if (si->length <= 512u) continue;
+                {
                     uint32_t old_cost = (uint32_t)si->length;
-                    uint32_t new_cost = ((uint32_t)si->length + 1u) / 2u;
-                    needed = needed - old_cost + new_cost;
-                    si->flags = (si->flags & ~0x03u) | SI_STYPE_ADPCM;		    
+                    uint32_t new_cost;
+                    if (SI_HAS_LOOP(si)) {
+                        new_cost = ((uint32_t)si->loop_start + 1u) / 2u
+                                 + ((uint32_t)si->loop_len   + 1u) / 2u;
+                    } else {
+                        new_cost = ((uint32_t)si->length + 1u) / 2u;
+                    }
+                    /* Only convert if it actually saves bytes (it always
+                     * does for the non-looped path; the looped path could
+                     * in theory be neutral on tiny attacks).             */
+                    if (new_cost < old_cost) {
+                        needed = needed - old_cost + new_cost;
+                        si->flags = (si->flags & ~0x03u) | SI_STYPE_ADPCM;
+                    }
                 }
             }
         }
@@ -176,16 +206,18 @@ uint8_t mod_load(const char *filename)
         /* Step B: if we still exceed RAM, downsample samples further.
          *
          * Both ADPCM and PCM samples are candidates -- downsampling happens
-         * before encoding so it is always valid.  The only restriction is
-         * looped samples cannot use ADPCM (already handled in Step A).
+         * before encoding so it is always valid.
          *
-         * Sort key: looped PCM first (can't ADPCM, quality suffers most),
-         * then non-looped ADPCM (already cheap; downsampling hurts less),
-         * within each tier by length descending (most bytes saved first).
+         * Sort key: non-ADPCM samples first (those that didn't qualify for
+         * ADPCM in step A, typically because they were too short).  Within
+         * each tier by length descending (most bytes saved first).  Looped
+         * samples may now be either PCM or ADPCM (two-blob); the sort no
+         * longer needs a separate "looped PCM" tier.
          *
          * Three passes: DS×2, DS×4, DS×8.  Cost formula per sample:
-         *   ADPCM: (length / ds_factor + 1) / 2
-         *   PCM:    length / ds_factor */
+         *   ADPCM non-looped: (length / ds_factor + 1) / 2
+         *   ADPCM looped    : (loop_start/ds + 1)/2 + (loop_len/ds + 1)/2
+         *   PCM             :  length / ds_factor */
         if (needed > (uint32_t)POKEYMAX_RAM_SIZE) {
             uint8_t  cand[MOD_MAX_SAMPLES];
             uint8_t  ncand = 0u;
@@ -231,8 +263,16 @@ uint8_t mod_load(const char *filename)
                         uint32_t old_cost, new_cost;
                         uint8_t ds_shift;
                         if (SI_IS_ADPCM(sc)) {
-                            old_cost = ((uint32_t)sc->length / ds_old + 1u) / 2u;
-                            new_cost = ((uint32_t)sc->length / ds_new + 1u) / 2u;
+                            if (SI_HAS_LOOP(sc)) {
+                                /* Two-blob: stored = ceil(loop_start/ds/2) + ceil(loop_len/ds/2) */
+                                old_cost = ((uint32_t)sc->loop_start / ds_old + 1u) / 2u
+                                         + ((uint32_t)sc->loop_len   / ds_old + 1u) / 2u;
+                                new_cost = ((uint32_t)sc->loop_start / ds_new + 1u) / 2u
+                                         + ((uint32_t)sc->loop_len   / ds_new + 1u) / 2u;
+                            } else {
+                                old_cost = ((uint32_t)sc->length / ds_old + 1u) / 2u;
+                                new_cost = ((uint32_t)sc->length / ds_new + 1u) / 2u;
+                            }
                         } else {
                             old_cost = (uint32_t)sc->length / ds_old;
                             new_cost = (uint32_t)sc->length / ds_new;
@@ -276,7 +316,13 @@ uint8_t mod_load(const char *filename)
             fi = SI_DS_SHIFT(si);
             if (SI_IS_ADPCM(si)) {
                 na[fi]++;
-		abytes += ((uint32_t)(si->length >> fi) + 1u) / 2u;
+                if (SI_HAS_LOOP(si)) {
+                    /* Two-blob: attack + loop body, each ceil-div by 2. */
+                    abytes += ((uint32_t)(si->loop_start >> fi) + 1u) / 2u
+                            + ((uint32_t)(si->loop_len   >> fi) + 1u) / 2u;
+                } else {
+                    abytes += ((uint32_t)(si->length >> fi) + 1u) / 2u;
+                }
             } else {
                 np[fi]++;
                 pbytes += (uint32_t)si->length >> fi;
@@ -315,7 +361,7 @@ uint8_t mod_load(const char *filename)
     {
         SampleInfo *si = &mod.samples[i];
         uint16_t    ram_addr, ram_needed;
-        uint16_t    remaining, chunk, written, out_len;
+        uint16_t    chunk, written, out_len;
         uint8_t ds_shift;
         uint8_t ds_factor;
         ADPCMState  adpcm_state;
@@ -331,11 +377,22 @@ uint8_t mod_load(const char *filename)
         }
 
         /* Compression plan already set by Pass 1 (is_adpcm, is_8bit,
-         * downsample_factor).  Just compute ram_needed from it. */
+         * downsample_factor).  Just compute ram_needed from it.
+         *
+         * Two-blob looped ADPCM: stored size is the sum of attack-block
+         * and loop-body-block stored sizes, since trailing data past
+         * loop_start+loop_len is discarded.                              */
         ds_shift = SI_DS_SHIFT(si);
         ds_factor = (uint8_t)(1u << ds_shift);  /* 1, 2, 4, or 8 */
         if (SI_IS_ADPCM(si)) {
-            ram_needed = ((si->length >> ds_shift) + 1u) / 2u;
+            if (SI_HAS_LOOP(si)) {
+                uint16_t ls_ds = (uint16_t)(si->loop_start >> ds_shift);
+                uint16_t ll_ds = (uint16_t)(si->loop_len   >> ds_shift);
+                ram_needed = (uint16_t)(((uint32_t)ls_ds + 1u) / 2u
+                                       + ((uint32_t)ll_ds + 1u) / 2u);
+            } else {
+                ram_needed = ((si->length >> ds_shift) + 1u) / 2u;
+            }
         } else {
             ram_needed = (si->length + (uint16_t)((1u << ds_shift) - 1u)) >> ds_shift;
         }
@@ -362,7 +419,9 @@ uint8_t mod_load(const char *filename)
         si->pokeymax_addr = ram_addr;
         si->pokeymax_len  = ram_needed;
 
-        /* Adjust loop points for downsampled samples */
+        /* Adjust loop points for downsampled samples.
+         * Done BEFORE encoding so we can use the post-downsample loop
+         * boundaries to drive the two-blob ADPCM split below. */
         if (ds_shift > 0u) {
             si->loop_start >>= ds_shift;
             si->loop_len   >>= ds_shift;
@@ -371,77 +430,127 @@ uint8_t mod_load(const char *filename)
 
         adpcm_state.predictor  = 0;
         adpcm_state.step_index = 0;
-        remaining = si->length;
         written   = 0;
 
-        while (remaining > 0u) {
-            chunk = (remaining > SECTOR_SIZE) ? SECTOR_SIZE : remaining;
-            if (cio_read(sector_buf, chunk) != chunk) return 1;
-            if (SI_IS_ADPCM(si)) {
-                /* Optionally downsample first, then ADPCM encode.
-                 * adpcm_out (128B) holds the decimated PCM intermediate.
-                 * enc_buf   (128B) holds the final ADPCM output.
-                 * Decimated size <= SECTOR_SIZE/2 = 128B, always fits. */
-                static uint8_t enc_buf[SECTOR_SIZE / 2];
-                const int8_t *src_ptr;
-                uint16_t      src_len;
-                if (ds_factor > 1u) {
-                    /* Anti-alias filtered downsample: average N consecutive
-                     * samples instead of just picking every Nth.
-                     * Suppresses aliasing from frequencies above the new
-                     * Nyquist.  Uses >> ds_shift instead of / factor
-                     * (ds_shift is log2(factor): 1,2,3 for 2x,4x,8x).
-                     * Cost: one int16_t accumulate per source sample —
-                     * cheap on 6502 during load (not VBI). */
-                    uint16_t k, di = 0u;
-                    uint8_t  factor = ds_factor;
-                    for (k = 0u; k + factor <= chunk; k += factor) {
-                        int16_t acc = 0;
-                        uint8_t m;
-                        for (m = 0u; m < factor; m++)
-                            acc += (int8_t)sector_buf[k + m];
-                        adpcm_out[di++] = (uint8_t)(int8_t)(acc >> ds_shift);
-                    }
-                    src_ptr = (const int8_t*)adpcm_out;
-                    src_len = di;
-                } else {
-                    src_ptr = (const int8_t*)sector_buf;
-                    src_len = chunk;
-                }
-                out_len = adpcm_encode_block(src_ptr, src_len,
-                                             enc_buf, &adpcm_state);
-                pokeymax_write_ram(ram_addr + written, enc_buf, out_len);
-                written += out_len;
-            } else if (ds_factor > 1u) {
-                /* Anti-alias filtered downsample for PCM: average N samples */
-                uint16_t k, out_idx = 0;
-                uint8_t  factor = ds_factor;
-                for (k = 0u; k + factor <= chunk; k += factor) {
-                    int16_t acc = 0;
-                    uint8_t m;
-                    for (m = 0u; m < factor; m++)
-                        acc += (int8_t)sector_buf[k + m];
-                    adpcm_out[out_idx++] = (uint8_t)(int8_t)(acc >> ds_shift);
-                }
-                pokeymax_write_ram(ram_addr + written, adpcm_out, out_idx);
-                written += out_idx;
-            } else {
-                pokeymax_write_ram(ram_addr + written, sector_buf, chunk);
-                written += chunk;
-            }
-            remaining -= chunk;
+        /* -----------------------------------------------------------------
+         * Two-blob ADPCM looped samples:
+         *   Block A = source bytes [0, loop_start_src_bytes)
+         *   Block B = source bytes [loop_start_src_bytes, ...+loop_len_src)
+         * Each block is encoded with a fresh ADPCM state of (0, 0).
+         * Trailing source bytes past Block B are skipped on disk.
+         *
+         * All other cases (non-looped, PCM-looped) stream a single range
+         * [0, length_src_bytes) -- identical behaviour to before this
+         * refactor.
+         *
+         * "src_bytes" everywhere below = pre-downsample bytes read from
+         * disk.  After the ds_shift>>= adjustment above, si->loop_start
+         * and si->loop_len are in POST-downsample samples, so we shift
+         * them back left here to get the disk-byte boundaries.
+         * ----------------------------------------------------------------- */
+        {
+            uint8_t   two_blob = (uint8_t)(SI_IS_ADPCM(si) && SI_HAS_LOOP(si));
+            uint32_t  blockA_src = two_blob
+                                 ? ((uint32_t)si->loop_start << ds_shift)
+                                 : (uint32_t)si->length;
+            uint32_t  blockB_src = two_blob
+                                 ? ((uint32_t)si->loop_len   << ds_shift)
+                                 : 0u;
+            uint32_t  total_played_src = blockA_src + blockB_src;
+            uint32_t  trailing_src     = (uint32_t)si->length - total_played_src;
+            uint32_t  sample_src_loaded = 0u;     /* for progress reporting */
+            uint8_t   blob;
+            uint32_t  blob_src_bytes_arr[2];
 
-            if (s_progress_plugin && s_progress_plugin->update) {
-                s_progress_plugin->update(s_progress_plugin->ctx,
-                                          si,
-                                          (uint16_t)(loaded_samples + 1u),
-                                          total_samples_to_load,
-                                          (uint32_t)(loaded_source_bytes + (si->length - remaining)),
-                                          total_sample_bytes,
-                                          (uint32_t)(loaded_stored_bytes + written),
-                                          0u);
+            blob_src_bytes_arr[0] = blockA_src;
+            blob_src_bytes_arr[1] = blockB_src;
+
+            for (blob = 0u; blob < (two_blob ? 2u : 1u); blob++) {
+                uint32_t blob_src_remaining = blob_src_bytes_arr[blob];
+
+                /* Reset ADPCM state at the start of every blob: blob 0 starts
+                 * from (0,0) by initialisation above; blob 1 needs a fresh
+                 * (0,0) so that the loop body decodes correctly each iteration
+                 * (the hardware wraps with syncreset asserted, which forces
+                 * the decoder accumulator to zero -- we must match here).   */
+                if (blob == 1u) {
+                    adpcm_state.predictor  = 0;
+                    adpcm_state.step_index = 0;
+                }
+
+                while (blob_src_remaining > 0u) {
+                    chunk = (blob_src_remaining > (uint32_t)SECTOR_SIZE)
+                          ? (uint16_t)SECTOR_SIZE
+                          : (uint16_t)blob_src_remaining;
+                    if (cio_read(sector_buf, chunk) != chunk) return 1;
+                    if (SI_IS_ADPCM(si)) {
+                        /* Downsample then ADPCM-encode this chunk.
+                         * adpcm_out (128B) holds the decimated PCM
+                         * intermediate; enc_buf (128B) holds the encoded
+                         * output.  Decimated size <= SECTOR_SIZE/2 = 128B. */
+                        static uint8_t enc_buf[SECTOR_SIZE / 2];
+                        const int8_t *src_ptr;
+                        uint16_t      src_len;
+                        if (ds_factor > 1u) {
+                            uint16_t k, di = 0u;
+                            uint8_t  factor = ds_factor;
+                            for (k = 0u; k + factor <= chunk; k += factor) {
+                                int16_t acc = 0;
+                                uint8_t m;
+                                for (m = 0u; m < factor; m++)
+                                    acc += (int8_t)sector_buf[k + m];
+                                adpcm_out[di++] = (uint8_t)(int8_t)(acc >> ds_shift);
+                            }
+                            src_ptr = (const int8_t*)adpcm_out;
+                            src_len = di;
+                        } else {
+                            src_ptr = (const int8_t*)sector_buf;
+                            src_len = chunk;
+                        }
+                        out_len = adpcm_encode_block(src_ptr, src_len,
+                                                     enc_buf, &adpcm_state);
+                        pokeymax_write_ram(ram_addr + written, enc_buf, out_len);
+                        written += out_len;
+                    } else if (ds_factor > 1u) {
+                        /* Anti-alias filtered downsample for PCM */
+                        uint16_t k, out_idx = 0;
+                        uint8_t  factor = ds_factor;
+                        for (k = 0u; k + factor <= chunk; k += factor) {
+                            int16_t acc = 0;
+                            uint8_t m;
+                            for (m = 0u; m < factor; m++)
+                                acc += (int8_t)sector_buf[k + m];
+                            adpcm_out[out_idx++] = (uint8_t)(int8_t)(acc >> ds_shift);
+                        }
+                        pokeymax_write_ram(ram_addr + written, adpcm_out, out_idx);
+                        written += out_idx;
+                    } else {
+                        pokeymax_write_ram(ram_addr + written, sector_buf, chunk);
+                        written += chunk;
+                    }
+                    blob_src_remaining -= chunk;
+                    sample_src_loaded  += chunk;
+
+                    if (s_progress_plugin && s_progress_plugin->update) {
+                        s_progress_plugin->update(s_progress_plugin->ctx,
+                                                  si,
+                                                  (uint16_t)(loaded_samples + 1u),
+                                                  total_samples_to_load,
+                                                  (uint32_t)(loaded_source_bytes + sample_src_loaded),
+                                                  total_sample_bytes,
+                                                  (uint32_t)(loaded_stored_bytes + written),
+                                                  0u);
+                    }
+                    had_status_output = 1;
+                }
             }
-            had_status_output = 1;
+
+            /* Skip any trailing source bytes past loop_start+loop_len for
+             * the two-blob case (Protracker stores them but they are never
+             * played -- the loop wraps before reaching them).            */
+            if (trailing_src > 0u) {
+                cio_seek(mod.filename, trailing_src, SEEK_CUR, NULL);
+            }
         }
 
         loaded_samples++;

@@ -154,12 +154,19 @@ static void trigger_setup_hw(uint8_t hw_chan, ChanState *cs)
      * automatically reloads from the registers.
      *
      * Looped samples: pre-load the loop region so the hardware
-     * seamlessly transitions to the loop. */
+     * seamlessly transitions to the loop.
+     *
+     * For looped ADPCM (two-blob layout):
+     *   Block A occupies the first ceil(loop_start/2) stored bytes.
+     *   Block B starts immediately after that.  We use (+1)>>1 (ceil)
+     *   rather than >>1 (floor) so that odd loop_start values still
+     *   land Block B on the correct byte boundary.
+     */
     if (cs->has_loop && cs->loop_len > 2u) {
         uint16_t loop_addr;
         uint16_t loop_len;
         if (cs->is_adpcm) {
-            loop_addr = cs->sam_addr + (cs->loop_start >> 1);
+            loop_addr = cs->sam_addr + ((cs->loop_start + 1u) >> 1);
         } else {
             loop_addr = cs->sam_addr + cs->loop_start;
         }
@@ -336,7 +343,20 @@ static void trigger_sample(uint8_t hw_chan, ChanState *cs)
     cs->is_adpcm   = SI_IS_ADPCM(si);
     cs->is_8bit    = !SI_IS_ADPCM(si);
     cs->active     = 1u;
-    if (cs->is_adpcm) {
+
+    /* sam_len is the SAMPLE count to play before the end-of-sample IRQ.
+     * For looped ADPCM we play in two blobs:
+     *   - Block A = attack [0, loop_start), so sam_len = loop_start samples.
+     *     When Block A ends, the hardware auto-reloads from the preload
+     *     that points at Block B (set up in trigger_setup_hw below), and
+     *     the IRQ->syncreset wiring resets ADPCM state to (0, 0) so that
+     *     Block B decodes correctly.
+     *   - Block B = loop body, encoded from (0, 0), looped forever after.
+     * For other modes sam_len is the full sample's sample count.
+     */
+    if (cs->is_adpcm && cs->has_loop) {
+        cs->sam_len = cs->loop_start;
+    } else if (cs->is_adpcm) {
         cs->sam_len = (uint16_t)(si->length * 2u);
     } else {
         cs->sam_len = si->length;

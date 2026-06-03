@@ -56,13 +56,17 @@ uint8_t mod_sample_irq_service(void)
                 /* Pre-load loop region for next hardware auto-reload.
                  * The hardware already auto-loaded the addr/len we
                  * pre-loaded last time.  We just need to re-arm the
-                 * same values for the NEXT end-of-sample event. */
+                 * same values for the NEXT end-of-sample event.
+                 *
+                 * For looped ADPCM (two-blob layout): Block B starts
+                 * at sam_addr + ceil(loop_start_samples / 2) -- use
+                 * (+1)>>1 not >>1 so odd loop_start values still
+                 * land Block B on the correct stored-byte boundary. */
                 uint16_t loop_addr;
                 uint16_t loop_len;
 
                 if (cs->is_adpcm) {
-                    /* ADPCM: 2 samples per byte, so byte addr = sample_offset/2 */
-                    loop_addr = cs->sam_addr + (cs->loop_start >> 1);
+                    loop_addr = cs->sam_addr + ((cs->loop_start + 1u) >> 1);
                     loop_len  = cs->loop_len;   /* length in samples */
                 } else {
                     loop_addr = cs->sam_addr + cs->loop_start;
