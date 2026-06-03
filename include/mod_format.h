@@ -53,14 +53,18 @@ typedef struct {
 /* flags byte layout:
  * bits 7:4  finetune (raw MOD nibble, 4-bit signed: 0..7 = 0..+7, 8..15 = -8..-1)
  * bits 3:2  downsample shift (0=none, 1=half-rate, 2=quarter-rate)
- * bits 1:0  sample type: 0=PCM, 1=PCM+loop, 2=ADPCM
+ * bits 1:0  sample type: 0=PCM, 1=PCM+loop, 2=ADPCM, 3=ADPCM+loop
  */
 #define SI_STYPE_PCM       0x00
 #define SI_STYPE_PCM_LOOP  0x01
 #define SI_STYPE_ADPCM     0x02
+#define SI_STYPE_ADPCM_LOOP 0x03
 
-#define SI_HAS_LOOP(si)    (((si)->flags & 0x03) == SI_STYPE_PCM_LOOP)
-#define SI_IS_ADPCM(si)    (((si)->flags & 0x03) == SI_STYPE_ADPCM)
+#define SI_STYPE(si)       ((si)->flags & 0x03)
+#define SI_HAS_LOOP(si)    (SI_STYPE(si) == SI_STYPE_PCM_LOOP || \
+                            SI_STYPE(si) == SI_STYPE_ADPCM_LOOP)
+#define SI_IS_ADPCM(si)    (SI_STYPE(si) == SI_STYPE_ADPCM || \
+                            SI_STYPE(si) == SI_STYPE_ADPCM_LOOP)
 #define SI_DS_SHIFT(si)    (((si)->flags >> 2) & 0x03)
 /* MOD finetune nibble: 0=0, 1=+1 .. 7=+7, 8=-8, 9=-7 .. 15=-1 (4-bit signed) */
 #define SI_FINETUNE(si)    ((int8_t)((((si)->flags >> 4) & 0x0F) > 7 ? \

@@ -114,13 +114,20 @@ nbit_tmp:    .res 1
         ldy #CS_IS_ADPCM
         lda (cs_ptr),y
         beq @pcm_addr
-        ; add (loop_start >> 1)
-        ldy #CS_LOOP_START+1
-        lda (cs_ptr),y
-        lsr a
-        sta len_tmp+1              ; reuse as shifted high
+        ; add ceil(loop_start / 2) = ((loop_start + 1) >> 1).
+        ; The two-blob ADPCM encoder stores an odd-length attack in
+        ; ceil(loop_start/2) bytes, so Block B starts at the next byte.
         ldy #CS_LOOP_START
         lda (cs_ptr),y
+        clc
+        adc #1
+        sta len_tmp
+        iny
+        lda (cs_ptr),y
+        adc #0
+        lsr a
+        sta len_tmp+1              ; reuse as shifted high
+        lda len_tmp
         ror a
         sta len_tmp
         clc

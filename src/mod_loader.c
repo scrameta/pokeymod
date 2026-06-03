@@ -197,8 +197,9 @@ uint8_t mod_load(const char *filename)
                      * in theory be neutral on tiny attacks).             */
                     if (new_cost < old_cost) {
                         needed = needed - old_cost + new_cost;
-                        si->flags = (si->flags & ~0x03u) | SI_STYPE_ADPCM;
-                    }
+                        si->flags = (si->flags & ~0x03u) |
+                                    (SI_HAS_LOOP(si) ? SI_STYPE_ADPCM_LOOP
+                                                     : SI_STYPE_ADPCM);
                 }
             }
         }
