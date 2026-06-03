@@ -355,7 +355,15 @@ static void trigger_sample(uint8_t hw_chan, ChanState *cs)
      * For other modes sam_len is the full sample's sample count.
      */
     if (cs->is_adpcm && cs->has_loop) {
-        cs->sam_len = cs->loop_start;
+        /* Two-blob looped ADPCM normally starts by playing Block A,
+         * the attack before the loop.  Some ProTracker samples are
+         * looped from offset 0, so Block A is empty and the stored data
+         * starts directly with Block B.  Do not program a zero-length
+         * first buffer: on real hardware that becomes LEN=$FFFF after
+         * the -1 below, and in the Linux harness it effectively leaves
+         * the channel silent.  Start directly on the loop body instead. */
+        cs->sam_len = (cs->loop_start != 0u) ? cs->loop_start
+                                             : cs->loop_len;
     } else if (cs->is_adpcm) {
         cs->sam_len = (uint16_t)(si->length * 2u);
     } else {
