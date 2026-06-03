@@ -200,6 +200,7 @@ uint8_t mod_load(const char *filename)
                         si->flags = (si->flags & ~0x03u) |
                                     (SI_HAS_LOOP(si) ? SI_STYPE_ADPCM_LOOP
                                                      : SI_STYPE_ADPCM);
+		    }
                 }
             }
         }
