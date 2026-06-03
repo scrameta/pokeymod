@@ -36,9 +36,9 @@ uint8_t app_loader_run(const char *filename, uint8_t show_progress_ui)
 
     printf("Orders:   %d\n", (int)mod.song_length);
     printf("Patterns: %d\n", (int)mod.num_patterns);
-    printf("RAM used: %u / %u\n",
+    printf("RAM used: %u / %lu\n",
            (unsigned)pokeymax_ram_ptr,
-           (unsigned)POKEYMAX_RAM_SIZE);
+           (unsigned long)POKEYMAX_RAM_SIZE);
 
     return 0;
 }
