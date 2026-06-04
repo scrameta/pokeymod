@@ -401,21 +401,19 @@ _adpcm_encode_block:
         sta pred_hi
 
 @update_index:
-        ; step_index += ima_index_table[nibble]; clamp to [0,88]
         ldy nibble
         lda step_index
         clc
         adc _ima_index_table,y
-        bmi @idx_underflow
+        bmi @idx_underflow         ; A < 0 → clamp to 0
         cmp #89
-        bcc @idx_ok
-        lda #88
-        bne @idx_store
+        bcc @idx_store             ; in range → store unchanged
+        lda #88                    ; A >= 89 → clamp
+        bne @idx_store             ; always-taken (88 != 0)
 @idx_underflow:
         lda #0
 @idx_store:
         sta step_index
-@idx_ok:
         ; nibble already in low four bits
         rts
 
