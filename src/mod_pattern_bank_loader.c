@@ -40,22 +40,48 @@ void load_patterns_to_banks()
     uint32_t pattern_data_pos;
     uint8_t pattern_base=0;
     uint8_t * internal_ram_base=0;
+    uint8_t no_os_portb=0x72;
+    uint8_t val=0;
 
     // Something stupid to start with
     mod.banks = mod.pattern_data_size>>12;
     if (mod.pattern_data_size&0x0fff) mod.banks+=1;   
 
     /* Bank 0 uses reserved high RAM at $7C00-$8BFF.
+       Then behind the OS
        Remaining banks use the normal 4x4KiB $4000-$7FFF bank window. */
-    mod.pattern_portb[0] = 0xFF;
     internal_ram_base= 1+ *(uint16_t *)(0xe); //reserved 12k after app
 
-    mod.pattern_bank_addr[0] = internal_ram_base;
-    mod.pattern_portb[1] = 0xFF;
-    mod.pattern_bank_addr[1] = internal_ram_base+4096;
-    mod.pattern_portb[2] = 0xFF;
-    mod.pattern_bank_addr[2] = internal_ram_base+8192;
-    pattern_base = 3;
+    // 12KB RAM in 48KB systems
+    mod.pattern_portb[pattern_base] = 0xFF;
+    mod.pattern_bank_addr[pattern_base] = internal_ram_base;
+    mod.pattern_portb[pattern_base+1] = 0xFF;
+    mod.pattern_bank_addr[pattern_base+1] = internal_ram_base+4096;
+    mod.pattern_portb[pattern_base+2] = 0xFF;
+    mod.pattern_bank_addr[pattern_base+2] = internal_ram_base+8192;
+    pattern_base += 3;
+
+    // OS = 0xc000 to 0xffff 
+    // Hardware = 0xd000 to 0xd7ff
+    // So we can use (4k chunks): 0xc000 to 0xcfff, 0xd800 to 0xe7ff, 0xe800 to 0xf7ff
+    // 0x2f4 is chbase, normally E0 -> this will blip out from time to time
+    // Copy chset fom 0xE0 to 0xf8 
+    // memcpy_banked(0xf800, 0xe000, 1024, no_os_portb, PIA.portb, 0x40);
+    memcpy_banked(&val, 0xf809, 1, no_os_portb, PIA.portb, 0x40);
+    if (val==0x18)
+    {
+	printf("Detected 64KB\n");
+        mod.pattern_portb[pattern_base] = no_os_portb;
+        mod.pattern_bank_addr[pattern_base] = 0xc000;
+        mod.pattern_portb[pattern_base+1] = no_os_portb;
+        mod.pattern_bank_addr[pattern_base+1] = 0xd800;
+        mod.pattern_portb[pattern_base+2] = no_os_portb;
+        mod.pattern_bank_addr[pattern_base+2] = 0xe800;
+        pattern_base += 3;
+    }
+
+    // Then bank switching
+    // TODO detect banks -- I need to have a val to compare with? So I need to be able to write to 0x4000 to 0x7fff somewhere
     for (i=pattern_base;i<(64+pattern_base);++i)
     {
         uint8_t j = (uint8_t)(i - pattern_base);
