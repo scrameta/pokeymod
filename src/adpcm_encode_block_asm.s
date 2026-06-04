@@ -20,21 +20,17 @@
         .import _ima_step_table
         .import _ima_index_table
 
-        .importzp ptr1          ; src
-        .importzp ptr2          ; dst
-        .importzp ptr3          ; state
-
         .segment "LOWCODE"
 
 _adpcm_encode_block:
         ; Save fastcall state pointer
-        sta ptr3
-        stx ptr3+1
+        sta adpcm_state_ptr
+        stx adpcm_state_ptr+1
 
         ; Pop dst pointer
         jsr popax
-        sta ptr2
-        stx ptr2+1
+        sta adpcm_dst_ptr
+        stx adpcm_dst_ptr+1
 
         ; Pop pcm_len
         jsr popax
@@ -43,18 +39,18 @@ _adpcm_encode_block:
 
         ; Pop src pointer
         jsr popax
-        sta ptr1
-        stx ptr1+1
+        sta adpcm_src_ptr
+        stx adpcm_src_ptr+1
 
         ; Pull ADPCMState into locals
         ldy #0
-        lda (ptr3),y
+        lda (adpcm_state_ptr),y
         sta pred_lo
         iny
-        lda (ptr3),y
+        lda (adpcm_state_ptr),y
         sta pred_hi
         iny
-        lda (ptr3),y
+        lda (adpcm_state_ptr),y
         sta step_index
 
         lda #0
@@ -68,13 +64,13 @@ _adpcm_encode_block:
         beq @finish
 
         ldy #0
-        lda (ptr1),y
+        lda (adpcm_src_ptr),y
         jsr @encode_one       ; result in nibble
 
         ; src++
-        inc ptr1
+        inc adpcm_src_ptr
         bne @src_ok
-        inc ptr1+1
+        inc adpcm_src_ptr+1
 @src_ok:
 
         ; --len
@@ -102,7 +98,7 @@ _adpcm_encode_block:
         lda packed
         ora nibble
         ldy #0
-        sta (ptr2),y
+        sta (adpcm_dst_ptr),y
         jsr @inc_dst_out
         lda #0
         sta phase
@@ -114,20 +110,20 @@ _adpcm_encode_block:
         beq @store_state
         lda packed
         ldy #0
-        sta (ptr2),y
+        sta (adpcm_dst_ptr),y
         jsr @inc_dst_out
 
 @store_state:
         ; Write final ADPCMState back
         ldy #0
         lda pred_lo
-        sta (ptr3),y
+        sta (adpcm_state_ptr),y
         iny
         lda pred_hi
-        sta (ptr3),y
+        sta (adpcm_state_ptr),y
         iny
         lda step_index
-        sta (ptr3),y
+        sta (adpcm_state_ptr),y
 
         lda out_count
         ldx out_count+1
@@ -137,9 +133,9 @@ _adpcm_encode_block:
 ; Increment dst pointer and 16-bit return byte count.
 ;-----------------------------------------------------------------------------
 @inc_dst_out:
-        inc ptr2
+        inc adpcm_dst_ptr
         bne @dst_ok
-        inc ptr2+1
+        inc adpcm_dst_ptr+1
 @dst_ok:
         inc out_count
         bne @out_ok
@@ -416,6 +412,15 @@ _adpcm_encode_block:
         sta step_index
         ; nibble already in low four bits
         rts
+
+        .segment "ZEROPAGE"
+
+; Private ZP pointers for the encoder.  Do not use cc65 ptr1/ptr2/ptr3
+; here: this routine can run while the player/VBI/IRQ machinery is active,
+; and those runtime temporaries are shared scratch.
+adpcm_src_ptr:      .res 2
+adpcm_dst_ptr:      .res 2
+adpcm_state_ptr:    .res 2
 
         .segment "LOWBSS"
 
