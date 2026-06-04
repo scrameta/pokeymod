@@ -15,7 +15,7 @@
 
 // TODO remove all printf
 
-#define SECTOR_SIZE 256
+#define SECTOR_SIZE 1024
 
 static uint8_t mod_file_open = 0;
 
