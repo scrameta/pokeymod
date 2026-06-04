@@ -43,8 +43,12 @@ uint8_t adpcm_encode_sample(int8_t pcm_sample, ADPCMState *state);
  * dst must be at least (pcm_len + 1) / 2 bytes.
  * Nibbles packed: high nibble = first sample, low nibble = second sample.
  */
-uint16_t adpcm_encode_block(const int8_t *src, uint16_t pcm_len,
-                             uint8_t *dst, ADPCMState *state);
+uint16_t 
+#ifdef __CC65__
+__fastcall__ 
+#endif
+adpcm_encode_block(const int8_t *src, uint16_t pcm_len,
+                                             uint8_t *dst, ADPCMState *state);
 
 /*
  * adpcm_decode_nibble()

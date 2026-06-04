@@ -181,6 +181,7 @@ uint8_t adpcm_encode_sample(int8_t pcm_sample, ADPCMState *state)
     return nibble;
 }
 
+#ifndef __CC65__
 uint16_t adpcm_encode_block(const int8_t *src, uint16_t pcm_len,
                              uint8_t *dst, ADPCMState *state)
 {
@@ -205,6 +206,7 @@ uint16_t adpcm_encode_block(const int8_t *src, uint16_t pcm_len,
 
     return out_bytes;
 }
+#endif
 
 /* Standalone decode — kept for the public API; macro does the real work. */
 int8_t adpcm_decode_nibble(uint8_t nibble, ADPCMState *state)

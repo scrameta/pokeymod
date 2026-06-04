@@ -23,7 +23,7 @@ SHARED_C = src/pokeymax_hw.c src/adpcm.c
 # --- Main loader and player ---
 LOADER_C = src/mod_loader.c src/app_loader.c src/mod.c src/mod_default_progress_plugin.c src/mod_pattern_bank_loader.c src/cio_file.c src/cio_call.s src/sdx_path.c \
            $(SHARED_C)
-LOADER_S = src/memcpy_banked.s
+LOADER_S = src/memcpy_banked.s src/adpcm_encode_block_asm.s
 
 PLAYER_C = src/app_player.c src/app_player_core.c src/modplayer.c src/chan_base.c \
            src/pokeymax_hw.c src/tables.c src/mod_pattern_bank.c src/mod.c
