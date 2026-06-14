@@ -47,6 +47,7 @@ void load_patterns_to_banks()
     mod.banks = mod.pattern_data_size>>12;
     if (mod.pattern_data_size&0x0fff) mod.banks+=1;   
 
+#ifdef __CC65__
     /* Bank 0 uses reserved high RAM at $7C00-$8BFF.
        Then behind the OS
        Remaining banks use the normal 4x4KiB $4000-$7FFF bank window. */
@@ -67,6 +68,7 @@ void load_patterns_to_banks()
     // 0x2f4 is chbase, normally E0 -> this will blip out from time to time
     // Copy chset fom 0xE0 to 0xf8 
     // memcpy_banked(0xf800, 0xe000, 1024, no_os_portb, PIA.portb, 0x40);
+    memcpy_banked(0xf800, 0xe000, 10, no_os_portb, PIA.portb, 0x40);
     memcpy_banked(&val, 0xf809, 1, no_os_portb, PIA.portb, 0x40);
     if (val==0x18)
     {
@@ -79,6 +81,7 @@ void load_patterns_to_banks()
         mod.pattern_bank_addr[pattern_base+2] = 0xe800;
         pattern_base += 3;
     }
+#endif
 
     // Then bank switching
     // TODO detect banks -- I need to have a val to compare with? So I need to be able to write to 0x4000 to 0x7fff somewhere
