@@ -16,6 +16,7 @@
 #include <stdint.h>
 #include <atari.h>
 #include <string.h>
+#include <stdio.h>
 #include "cio_file.h"
 
 /* IOCB we exclusively use */
@@ -185,11 +186,13 @@ uint8_t cio_seek(const char *filename, uint32_t pos, uint8_t whence,
     uint32_t target;
     uint8_t skip_buf[128];
 
-    if (whence == 1) {
+    if (whence == SEEK_CUR) {
         target = cio_pos + pos;
-    } else {
+    } else if (whence == SEEK_SET) {
         target = pos;
-    }
+    } else {
+        return 1;	  
+    }	    
 
     if (target == cio_pos) return 0;
 
