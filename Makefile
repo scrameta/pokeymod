@@ -112,8 +112,8 @@ test10.xex: $(TEST10_C) $(TEST56_S) src/loop_handler_irq.s
 test11.xex: $(TEST11_C) $(TEST56_S) src/loop_handler_irq.s
 	cl65 $(CFLAGS) -o test11.xex $(TEST11_C) $(TEST56_S) src/loop_handler_irq.s
 	@echo "Built: test11.xex"
-test-adpcm-linux: tests/adpcm_roundtrip_linux.c src/adpcm.c include/adpcm.h
-	gcc -std=c99 -O2 -Wall -Wextra -Iinclude -o tests/adpcm_roundtrip_linux tests/adpcm_roundtrip_linux.c src/adpcm.c -lm
+test-adpcm-linux: tests/adpcm_roundtrip_linux.c src/adpcm.c src/adpcm_decode.c include/adpcm.h
+	gcc -std=c99 -O2 -Wall -Wextra -Iinclude -o tests/adpcm_roundtrip_linux tests/adpcm_roundtrip_linux.c src/adpcm.c src/adpcm_decode.c -lm
 	./tests/adpcm_roundtrip_linux
 
 clean:

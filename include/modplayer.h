@@ -30,21 +30,16 @@
 /* -------------------------------------------------------
  * Configuration
  * ------------------------------------------------------- */
-#define MOD_USE_PAL         1   /* 1=PAL 50Hz VBI, 0=NTSC 60Hz VBI */
+#define PAL_PAULA_CLOCK     3546895UL
+#define NTSC_PAULA_CLOCK    3579545UL
+#define PAL_POKEY_CLOCK      (PAL_PAULA_CLOCK / 2UL)
+#define NTSC_POKEY_CLOCK     (NTSC_PAULA_CLOCK / 2UL)
+#define PAL_VBI_HZ          50
+#define NTSC_VBI_HZ         60
 
-/* Amiga Paula clock for period→frequency conversion
- * PAL:  3546895 Hz / 2 = 1773447  (per channel)
- * NTSC: 3579545 Hz / 2 = 1789772  */
-#if MOD_USE_PAL
-  #define PAULA_CLOCK       3546895UL
-  #define VBI_HZ            50
-#else
-  #define PAULA_CLOCK       3579545UL
-  #define VBI_HZ            60
-#endif
-
-/* PokeyMAX core clock = 2*phi2 */
-#define POKEYMAX_CLOCK      PAULA_CLOCK
+/* PokeyMAX core clock = 2*phi2.  Sample period conversion uses the
+ * PAL Paula-compatible clock; tracker tick timing is selected at runtime. */
+#define POKEYMAX_CLOCK      PAL_PAULA_CLOCK
 
 /*
  * Ticks per row = speed (set by Fx with x<32)
@@ -78,6 +73,10 @@ void mod_play(void);
 void mod_stop(void);
 void mod_pause(void);
 
+/* Detect Atari video standard from GTIA PAL register ($D014).
+ * Returns PAL_VBI_HZ or NTSC_VBI_HZ. */
+uint8_t mod_detect_vbi_hz(void);
+
 /*
  * mod_vbi_tick()
  * Call from deferred VBI ISR. Advances the player by one VBI frame.
@@ -85,6 +84,10 @@ void mod_pause(void);
  * per VBI depending on BPM).
  */
 void mod_vbi_tick(void);
+
+/* Timer IRQ entry point.  Runs exactly one MOD tick; the POKEY timer period
+ * is updated when an F20+ BPM command changes mod.bpm. */
+void mod_timer_tick(void);
 
 /*
  * mod_set_volume()

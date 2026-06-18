@@ -11,6 +11,18 @@ void    pokeymax_mock_poke(uint16_t addr, uint8_t val);
 #define POKE_OR(addr, val)  POKE((addr), (uint8_t)(PEEK(addr) | (val)))
 #define POKE_AND(addr, val) POKE((addr), (uint8_t)(PEEK(addr) & (val)))
 
+#define REG_AUDF1       0xD200U
+#define REG_AUDF2       0xD202U
+#define REG_AUDCTL      0xD208U
+#define REG_STIMER      0xD209U
+#define REG_IRQST       0xD20EU
+#define REG_POKEY_IRQEN 0xD20EU
+#define POKMSK          0x0010U
+
+#define POKEY_IRQ_TIMER2 0x02u
+#define AUDCTL_CH1_179   0x40u
+#define AUDCTL_CH12_16   0x10u
+
 /* Same register defs as include/pokeymax.h */
 #define REG_RAMADDRL    0xD284U
 #define REG_RAMADDRH    0xD285U

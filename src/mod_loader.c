@@ -18,6 +18,8 @@
 #define SECTOR_SIZE 1024
 
 static uint8_t mod_file_open = 0;
+static uint8_t default_legacy_bpm = DEFAULT_BPM;
+static uint8_t default_timing_mode = MOD_TIMING_VBI;
 
 #pragma bss-name(push, "LOWBSS")
 static uint8_t sector_buf[SECTOR_SIZE];
@@ -42,6 +44,16 @@ void mod_file_close(void)
 void mod_set_load_progress_plugin(const ModLoadProgressPlugin *plugin)
 {
     s_progress_plugin = plugin;
+}
+
+void mod_set_legacy_tempo_pal(uint8_t pal)
+{
+    default_legacy_bpm = pal ? DEFAULT_BPM : 150u;
+}
+
+void mod_set_timer_timing(uint8_t enabled)
+{
+    default_timing_mode = enabled ? MOD_TIMING_TIMER : MOD_TIMING_VBI;
 }
 
 
@@ -577,7 +589,9 @@ uint8_t mod_load(const char *filename)
     mod.row           = 0;
     mod.tick          = 0;
     mod.speed         = DEFAULT_SPEED;
-    mod.bpm           = DEFAULT_BPM;
+    mod.bpm           = default_legacy_bpm;
+    mod.vbi_hz        = PAL_VBI_HZ;
+    mod.timing_mode   = default_timing_mode;
     mod.loop_song     = 1;
     mod.playing       = 0;
     mod.pattern_break = 0;

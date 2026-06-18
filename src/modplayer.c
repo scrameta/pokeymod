@@ -545,41 +545,78 @@ static void update_effects(void) { update_effects_range(0u, MOD_CHANNELS); }
  * NTSC 60 Hz → divisor 3600 → step ≈ BPM + (BPM * 177) / 256
  *   BPM*177 max = 45135 (fits uint16_t).
  *
- * Generic fallback uses one unavoidable 32-bit multiply but is
- * only compiled for non-PAL/NTSC targets.
+ * Generic fallback uses one unavoidable 32-bit multiply for any
+ * future non-PAL/NTSC VBI rate.
  * ------------------------------------------------------- */
-static uint16_t bpm_accum = 0u;
-static uint16_t bpm_step  = 0u;
-static uint8_t  last_bpm  = 0u;
+#define GTIA_PAL_REG 0xD014u
+
+static uint16_t bpm_accum  = 0u;
+static uint16_t bpm_step   = 0u;
+static uint8_t  last_bpm   = 0u;
+static uint8_t  last_vbi_hz = 0u;
+static uint8_t  last_timer_bpm = 0u;
+static uint8_t  last_timer_hz  = 0u;
+
+uint8_t mod_detect_vbi_hz(void)
+{
+    /* GTIA PAL ($D014) is 1 on PAL machines and 15 on NTSC machines. */
+    return (PEEK(GTIA_PAL_REG) == 1u) ? PAL_VBI_HZ : NTSC_VBI_HZ;
+}
+
+
+static uint16_t timer_period_for_bpm(uint8_t bpm8, uint8_t vbi_hz)
+{
+    uint32_t clock;
+    uint32_t period;
+    if (bpm8 == 0u) bpm8 = DEFAULT_BPM;
+    clock = (vbi_hz == NTSC_VBI_HZ) ? NTSC_POKEY_CLOCK : PAL_POKEY_CLOCK;
+    /* 16-bit POKEY timer, 1.79MHz clock: period ~= clock / (BPM*24/60). */
+    period = (clock * 60UL + ((uint32_t)bpm8 * 12UL)) / ((uint32_t)bpm8 * 24UL);
+    if (period == 0UL) period = 1UL;
+    if (period > 65535UL) period = 65535UL;
+    return (uint16_t)period;
+}
+
+static void update_timer_period(void)
+{
+    uint8_t bpm8 = (uint8_t)mod.bpm;
+    uint8_t hz = mod.vbi_hz ? mod.vbi_hz : PAL_VBI_HZ;
+    uint16_t period;
+    if (mod.timing_mode != MOD_TIMING_TIMER) return;
+    if (bpm8 == last_timer_bpm && hz == last_timer_hz) return;
+    last_timer_bpm = bpm8;
+    last_timer_hz  = hz;
+    period = timer_period_for_bpm(bpm8, hz);
+    POKE(REG_AUDF1, (uint8_t)(period & 0xFFu));
+    POKE(REG_AUDF2, (uint8_t)(period >> 8));
+    POKE(REG_STIMER, 0u);
+}
 
 static void update_bpm_step(void)
 {
     uint8_t bpm8;
-    if (mod.bpm == last_bpm) return;
-    last_bpm = (uint8_t)mod.bpm;
-    bpm8     = last_bpm;
+    uint8_t vbi_hz = mod.vbi_hz;
+    if (vbi_hz == 0u) vbi_hz = PAL_VBI_HZ;
+    if (mod.bpm == last_bpm && vbi_hz == last_vbi_hz) return;
+    last_bpm    = (uint8_t)mod.bpm;
+    last_vbi_hz = vbi_hz;
+    bpm8        = last_bpm;
 
-#if VBI_HZ == 50
-    {
+    if (vbi_hz == PAL_VBI_HZ) {
         /* step = BPM*2 + (BPM*12 + 125) / 250   (all uint16_t) */
         uint16_t hi = (uint16_t)bpm8 << 1;
         uint16_t lo = (uint16_t)bpm8 * 12u + 125u;
         bpm_step = hi + lo / 250u;
-    }
-#elif VBI_HZ == 60
-    {
+    } else if (vbi_hz == NTSC_VBI_HZ) {
         /* step ≈ BPM + (BPM * 177) >> 8 */
         uint16_t frac = (uint16_t)bpm8 * 177u;
         bpm_step = (uint16_t)bpm8 + (frac >> 8);
-    }
-#else
-    {
+    } else {
         /* Generic: one 32-bit multiply (rare, non-standard VBI rate) */
         uint32_t numer = (uint32_t)bpm8 * 6144UL;
-        uint16_t denom = (uint16_t)(60u * (uint16_t)VBI_HZ);
+        uint16_t denom = (uint16_t)(60u * (uint16_t)vbi_hz);
         bpm_step = (uint16_t)((numer + (uint32_t)(denom >> 1u)) / denom);
     }
-#endif
 }
 
 /* -------------------------------------------------------
@@ -898,12 +935,20 @@ void mod_vbi_tick(void)
     }
 }
 
+void mod_timer_tick(void)
+{
+    if (!mod.playing) return;
+    do_tick();
+    if (mod.playing) update_timer_period();
+}
+
 /* -------------------------------------------------------
  * Public API
  * ------------------------------------------------------- */
 void mod_play(void)
 {
     uint8_t ch;
+    mod.vbi_hz = mod_detect_vbi_hz();
     last_rtclock = PEEK(RTCLOK);
     if (mod.playing) return;
 
@@ -929,8 +974,12 @@ void mod_play(void)
     row_work_channel = 0u;
     row_work_data    = 0;
 
-    bpm_accum = 0u;
-    last_bpm  = 0u;
+    bpm_accum   = 0u;
+    last_bpm    = 0u;
+    last_vbi_hz = 0u;
+    last_timer_bpm = 0u;
+    last_timer_hz  = 0u;
+    update_timer_period();
 
     POKE(REG_DMA,    0x00u);
     POKE(REG_IRQACT, 0x00u);

@@ -10,7 +10,7 @@
  *     -o tests/linux_mod_harness \
  *     tests/linux_mod_harness.c \
  *     src/modplayer.c src/mod_loader.c src/pokeymax_hw.c src/loop_handler.c \
- *     src/adpcm.c src/tables.c
+ *     src/adpcm.c src/adpcm_decode.c src/tables.c
  *
  * Run:
  *   ./tests/linux_mod_harness bladerun.mod --frames 3000 --trace-boundary
@@ -869,7 +869,7 @@ static int16_t mock_fetch_pcm8_linear_safe(const MockChan *c) {
 
 static void usage(const char *argv0) {
     fprintf(stderr,
-            "Usage: %s <modfile> [--frames N] [--verbose] [--trace-boundary] [--no-loop-handler] [--wav out.wav] [--rate Hz] [--gain N] [--dump-placement] [--warn-fetch] [--warn-fetch-limit N]\n",
+            "Usage: %s <modfile> [/N] [/T] [--frames N] [--verbose] [--trace-boundary] [--no-loop-handler] [--wav out.wav] [--rate Hz] [--gain N] [--dump-placement] [--warn-fetch] [--warn-fetch-limit N]\n",
             argv0);
 }
 
@@ -891,6 +891,7 @@ int main(int argc, char **argv) {
     g.dump_placement = 0;
     g.warn_fetch = 0;
     g.warn_fetch_limit = 8;
+    g.regs[0xD014u] = 1u; /* default PAL GTIA PAL register value */
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--frames") == 0 && i + 1 < argc) {
@@ -898,6 +899,14 @@ int main(int argc, char **argv) {
         } else if (strcmp(argv[i], "--seconds") == 0 && i + 1 < argc) {
             seconds_override = strtod(argv[++i], NULL);
             if (seconds_override < 0.0) seconds_override = 0.0;
+        } else if (strcmp(argv[i], "/N") == 0 || strcmp(argv[i], "/n") == 0) {
+            mod_set_legacy_tempo_pal(0u);
+            g.regs[0xD014u] = 15u;
+        } else if (strcmp(argv[i], "/T") == 0 || strcmp(argv[i], "/t") == 0) {
+            mod_set_timer_timing(1u);
+        } else if (strcmp(argv[i], "/?") == 0) {
+            usage(argv[0]);
+            return 0;
         } else if (strcmp(argv[i], "--verbose") == 0) {
             g.verbose = 1;
         } else if (strcmp(argv[i], "--trace-boundary") == 0) {
@@ -943,7 +952,8 @@ int main(int argc, char **argv) {
             dbg.enabled = 1;
 //        } else if (strcmp(argv[i], "--ram-size") == 0 && i + 1 < argc) {
 //            POKEYMAX_RAM_SIZE = atol(argv[++i]);
-        } else if (argv[i][0] == '-') {
+        } else if (argv[i][0] == '-' || argv[i][0] == '/') {
+            fprintf(stderr, "bad option: %s\n", argv[i]);
             usage(argv[0]);
             return 2;
         } else {
@@ -956,8 +966,8 @@ int main(int argc, char **argv) {
         return 2;
     }
     if (seconds_override > 0.0) {
-        /* 50 VBI/sec */
-        max_frames = (uint32_t)(seconds_override * 50.0 + 0.5);
+        uint8_t hz = (g.regs[0xD014u] == 1u) ? PAL_VBI_HZ : NTSC_VBI_HZ;
+        max_frames = (uint32_t)(seconds_override * (double)hz + 0.5);
     }
 
     if (mod_load(modfile) != 0u) {
@@ -1008,7 +1018,8 @@ int main(int argc, char **argv) {
          * where the deferred VBI fires and POKEs registers before the
          * audio hardware plays the next frame's worth of samples. */
         pokeymax_mock_poke(RTCLOK,pokeymax_mock_peek(RTCLOK)+1);
-        mod_vbi_tick();
+        if (mod.timing_mode == MOD_TIMING_TIMER) mod_timer_tick();
+        else mod_vbi_tick();
 
         /* Main loop prefetch polling */
 #ifdef IO
