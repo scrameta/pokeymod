@@ -7,6 +7,7 @@
 
 #include "pokeymax.h"
 #include "mod_app.h"
+#include "mod_loader.h"
 #include "mod_struct.h"
 #include "mod_pattern_bank_loader.h"
 #include "sdx_path.h"
@@ -19,8 +20,15 @@ int main(int argc, char *argv[])
     int i;
 
     for (i = 1; i < argc; i++) {
-
-        filename = argv[i];
+        if (strcmp(argv[i], "/N") == 0 || strcmp(argv[i], "-N") == 0 ||
+            strcmp(argv[i], "/n") == 0 || strcmp(argv[i], "-n") == 0) {
+            mod_set_legacy_tempo_pal(0u);
+        } else if (strcmp(argv[i], "/T") == 0 || strcmp(argv[i], "-T") == 0 ||
+                   strcmp(argv[i], "/t") == 0 || strcmp(argv[i], "-t") == 0) {
+            mod_set_timer_timing(1u);
+        } else {
+            filename = argv[i];
+        }
     }
 
     sdx_resolve_path(filename, resolved, 64);

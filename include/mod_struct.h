@@ -8,21 +8,17 @@
 /* -------------------------------------------------------
  * Configuration
  * ------------------------------------------------------- */
-#define MOD_USE_PAL         1   /* 1=PAL 50Hz VBI, 0=NTSC 60Hz VBI */
+#define PAL_PAULA_CLOCK     3546895UL
+#define NTSC_PAULA_CLOCK    3579545UL
+#define PAL_VBI_HZ          50
+#define NTSC_VBI_HZ         60
 
-/* Amiga Paula clock for period→frequency conversion
- * PAL:  3546895 Hz / 2 = 1773447  (per channel)
- * NTSC: 3579545 Hz / 2 = 1789772  */
-#if MOD_USE_PAL
-  #define PAULA_CLOCK       3546895UL
-  #define VBI_HZ            50
-#else
-  #define PAULA_CLOCK       3579545UL
-  #define VBI_HZ            60
-#endif
+#define MOD_TIMING_VBI      0u
+#define MOD_TIMING_TIMER    1u
 
-/* PokeyMAX core clock = 2*phi2 */
-#define POKEYMAX_CLOCK      PAULA_CLOCK
+/* PokeyMAX core clock = 2*phi2.  Sample period conversion uses the
+ * PAL Paula-compatible clock; tracker tick timing is selected at runtime. */
+#define POKEYMAX_CLOCK      PAL_PAULA_CLOCK
 
 /* Default BPM and speed (ProTracker defaults) */
 #define DEFAULT_BPM         125
@@ -117,6 +113,8 @@ typedef struct {
     /* Timing */
     uint8_t  speed;                /* ticks per row */
     uint16_t bpm;
+    uint8_t  vbi_hz;               /* detected playback VBI rate: 50 PAL or 60 NTSC */
+    uint8_t  timing_mode;          /* MOD_TIMING_VBI or MOD_TIMING_TIMER */
 
     /* Pattern break/jump */
     uint8_t  pattern_break;

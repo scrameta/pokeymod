@@ -10,6 +10,7 @@
 
 extern void vbi_install(void);
 extern void vbi_remove(void);
+extern unsigned char vbi_timer_enabled;
 
 #define MOD_KEY_NONE  255
 #define MOD_KEY_SPACE  33
@@ -50,6 +51,7 @@ void app_player_run(void)
     POKE(0x02FC, MOD_KEY_NONE);
 
     app_player_start();
+    vbi_timer_enabled = (mod.timing_mode == MOD_TIMING_TIMER);
     vbi_install();
 
     while (mod.playing || paused) {

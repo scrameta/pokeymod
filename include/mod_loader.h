@@ -15,6 +15,14 @@
  */
 uint8_t mod_load(const char *filename);
 
+/* Select the default speed-only tempo before mod_load().
+ * PAL uses BPM 125 (50 ticks/sec); NTSC uses BPM 150 (60 ticks/sec).
+ * Files that contain F20+ BPM commands still override this during playback. */
+void mod_set_legacy_tempo_pal(uint8_t pal);
+
+/* Select player tick source before mod_load(). 0=deferred VBI, non-zero=POKEY timer. */
+void mod_set_timer_timing(uint8_t enabled);
+
 /*
  * mod_file_close()
  * Close the MOD file (call after playback ends).

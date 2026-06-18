@@ -15,7 +15,9 @@
 
         .export _vbi_install
         .export _vbi_remove
+        .export _vbi_timer_enabled
         .import _mod_vbi_tick
+        .import _mod_timer_tick
         .import _pokeymax_loop_irq_fast
         .importzp c_sp
 
@@ -28,8 +30,20 @@ XITVBV      = $E462     ; OS: exit deferred VBI
 SAM_IRQACT  = $D292     ; PokeyMAX sample end IRQ active/clear
 COLBK       = $D01A     ; GTIA background color
 
+AUDF1       = $D200
+AUDF2       = $D202
+AUDCTL      = $D208
+STIMER      = $D209
+IRQST       = $D20E     ; POKEY IRQ status, active low
+IRQEN_POKEY = $D20E
+POKMSK      = $0010
+
+TIMER2_BIT  = $02
+AUDCTL_TIMER_BITS = $50 ; channel 1+2 as 16-bit timer, 1.79MHz clock
+
 BUSY_COLOR_VBI = $38    ; red green pulse while VBI music tick runs
 BUSY_COLOR_IRQ = $68    ; blue pulse while sample IRQ loop handler runs
+BUSY_COLOR_TIM = $48    ; purple pulse while timer music tick runs
 
 ; cc65 zero page on Atari target starts at $82.
 ; It uses 26 bytes ($1A): c_sp, sreg, regsave, ptr1-4, tmp1-4, regbank
@@ -45,6 +59,9 @@ old_vbi:    .res 2      ; lo, hi — must be contiguous for JMP indirect
 old_irq:    .res 2      ; lo, hi — must be contiguous for JMP indirect
 zp_save_vbi:  .res ZP_SAVE_LEN   ; VBI zero page save area
 saved_sp:     .res 2
+_vbi_timer_enabled: .res 1
+old_audctl:  .res 1
+old_pokmsk:  .res 1
 
 ; Dedicated C stack while running the deferred VBI C tick.
 ; This prevents re-entrant use of the foreground's cc65 software stack,
@@ -70,11 +87,15 @@ vbi_cstack:    .res VBI_CSTACK_SIZE
         lda VIMIRQ+1
         sta old_irq+1
 
+        lda _vbi_timer_enabled
+        bne @skip_vbi_install
+
         ; Install deferred VBI via OS SETVBV (A=7, X=hi, Y=lo)
         ldy #<our_vbi          ; Y = low byte
         ldx #>our_vbi          ; X = high byte
         lda #7                 ; deferred VBI (VVBLKD)
         jsr SETVBV
+@skip_vbi_install:
 
         ; Install IRQ handler
         sei
@@ -82,6 +103,21 @@ vbi_cstack:    .res VBI_CSTACK_SIZE
         sta VIMIRQ
         lda #>our_irq
         sta VIMIRQ+1
+
+        lda _vbi_timer_enabled
+        beq @no_timer_start
+        lda AUDCTL
+        sta old_audctl
+        ora #AUDCTL_TIMER_BITS
+        sta AUDCTL
+        lda POKMSK
+        sta old_pokmsk
+        ora #TIMER2_BIT
+        sta POKMSK
+        sta IRQEN_POKEY
+        lda #0
+        sta STIMER
+@no_timer_start:
         cli
 
         rts
@@ -91,11 +127,15 @@ vbi_cstack:    .res VBI_CSTACK_SIZE
 ; vbi_remove()
 ;--------------------------------------------------------------
 .proc _vbi_remove
+        lda _vbi_timer_enabled
+        bne @skip_vbi_restore
+
         ; Restore deferred VBI
         ldy old_vbi         ; Y = low byte
         ldx old_vbi+1         ; X = high byte
         lda #7                 ; deferred VBI
         jsr SETVBV
+@skip_vbi_restore:
 
         ; Restore IRQ
         sei
@@ -103,6 +143,15 @@ vbi_cstack:    .res VBI_CSTACK_SIZE
         sta VIMIRQ
         lda old_irq+1
         sta VIMIRQ+1
+
+        lda _vbi_timer_enabled
+        beq @no_timer_stop
+        lda old_pokmsk
+        sta POKMSK
+        sta IRQEN_POKEY
+        lda old_audctl
+        sta AUDCTL
+@no_timer_stop:
         cli
 
         rts
@@ -195,8 +244,17 @@ vbi_cstack:    .res VBI_CSTACK_SIZE
         ; Quick check: is this a PokeyMAX sample IRQ?
         pha                     ; save A first (needed for RTI path)
         lda SAM_IRQACT
-        beq @chain              ; nothing from PokeyMAX, skip
+        bne @sample_irq
 
+@check_timer:
+        lda _vbi_timer_enabled
+        beq @chain
+        lda IRQST               ; active-low POKEY IRQ status
+        and #TIMER2_BIT
+        bne @chain              ; bit set means no timer-2 IRQ
+        jmp @timer_irq
+
+@sample_irq:
         ; Mark CPU busy while loop IRQ work is executing.
         lda #BUSY_COLOR_IRQ
         sta COLBK
@@ -213,6 +271,54 @@ vbi_cstack:    .res VBI_CSTACK_SIZE
         sta COLBK
 
         ; loop handler clears IRQACT internally
+
+        pla
+        tay
+        pla
+        tax
+        jmp @check_timer
+
+@timer_irq:
+        lda #BUSY_COLOR_TIM
+        sta COLBK
+
+        txa
+        pha
+        tya
+        pha
+
+        ; Save cc65 zero page temporaries before calling C from IRQ.
+        ldx #ZP_SAVE_LEN-1
+@tsave: lda ZP_SAVE_START,x
+        sta zp_save_vbi,x
+        dex
+        bpl @tsave
+
+        ; Switch to private interrupt C stack. IRQs are already disabled.
+        lda c_sp
+        sta saved_sp
+        lda c_sp+1
+        sta saved_sp+1
+        lda #<(vbi_cstack + VBI_CSTACK_SIZE)
+        sta c_sp
+        lda #>(vbi_cstack + VBI_CSTACK_SIZE)
+        sta c_sp+1
+
+        jsr _mod_timer_tick
+
+        lda saved_sp
+        sta c_sp
+        lda saved_sp+1
+        sta c_sp+1
+
+        ldx #ZP_SAVE_LEN-1
+@trest: lda zp_save_vbi,x
+        sta ZP_SAVE_START,x
+        dex
+        bpl @trest
+
+        lda #0
+        sta COLBK
 
         pla
         tay
