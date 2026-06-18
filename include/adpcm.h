@@ -1,10 +1,10 @@
 /*
- * adpcm.h / adpcm.c (single-header style for cc65)
+ * adpcm.h - ADPCM encoder API plus host/shim decoder API
  *
  * IMA ADPCM codec helpers for PokeyMAX data format.
  *
  * Encoder: converts 8-bit signed PCM → 4-bit IMA ADPCM.
- * Decoder: converts 4-bit IMA ADPCM nibble → 8-bit signed PCM.
+ * Decoder: converts 4-bit IMA ADPCM nibble → 8-bit signed PCM (implemented in adpcm_decode.c for host/shim builds).
  * Compatible with sox "-e ima-adpcm" output as used by PokeyMAX.
  *
  * Output format: nibbles packed high-nibble-first per byte for PokeyMAX

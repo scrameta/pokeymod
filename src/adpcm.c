@@ -1,5 +1,5 @@
 /*
- * adpcm.c - IMA ADPCM encoder/decoder for PokeyMAX sample upload
+ * adpcm.c - IMA ADPCM encoder and tables for PokeyMAX sample upload
  *
  * Encodes 8-bit signed PCM to 4-bit IMA ADPCM (4:1 compression).
  * PokeyMAX block RAM holds ~43KB; ADPCM extends effective capacity to ~168KB.
@@ -14,17 +14,8 @@
  *     shifting the working copy of 'step' twice in sequence.  Saves two
  *     16-bit right-shifts per sample.
  *
- *  3. Decoder: all arithmetic converted from int32_t to uint16_t / int16_t.
- *     Every 32-bit operation on 6502 compiles to ~4x the instructions of its
- *     16-bit equivalent.  diff fits in uint16_t (max = step * 1.875 < 65535
- *     because the step table tops out at 32767).  Overflow after the
- *     int16_t add/sub is detected by sign-change, same as the encoder.
- *
- *  4. Decoder inlined into adpcm_decode_block() as a macro.  On 6502 each
- *     JSR/RTS + parameter-passing round-trip is expensive; with sample_count
- *     potentially in the thousands this adds up fast.  The standalone
- *     adpcm_decode_nibble() wrapper is kept for the public API but just
- *     invokes the macro.
+ * Decoder helpers live in adpcm_decode.c so Atari XEX builds that only need
+ * encode/upload support do not pull decoder code into memory.
  */
 
 #include <stdint.h>
@@ -120,49 +111,6 @@ const int8_t ima_index_table[16] = {
         (out_nibble) = (uint8_t)(nibble_local & 0x0F);                               \
     } while (0)
 
-/* -------------------------------------------------------------------------
- * ADPCM_DECODE_NIBBLE
- *
- * Inlineable macro version of the decoder.
- *
- * Changes from original adpcm_decode_nibble():
- *   - All arithmetic in uint16_t / int16_t instead of int32_t.
- *     diff max = step * (1 + 0.5 + 0.25 + 0.125) = step * 1.875.
- *     step table max = 32767, so diff max = 61438 — fits in uint16_t.
- *   - Predictor clamp uses sign-overflow check (same pattern as encoder)
- *     rather than comparing against ±32767/32768 as 32-bit constants.
- * ------------------------------------------------------------------------- */
-#define ADPCM_DECODE_NIBBLE(nibble, predictor_var, step_index_var, out_pcm8)     \
-    do {                                                                          \
-        uint16_t step16   = ima_step_table[(step_index_var)];                    \
-        uint16_t diff16   = step16 >> 3;                                         \
-        int16_t  pred16   = (predictor_var);                                     \
-        int16_t  new_pred16;                                                      \
-        int8_t   idx16;                                                           \
-                                                                                  \
-        if ((nibble) & 4u) diff16 += step16;                                     \
-        if ((nibble) & 2u) diff16 += (step16 >> 1);                              \
-        if ((nibble) & 1u) diff16 += (step16 >> 2);                              \
-                                                                                  \
-        if ((nibble) & 8u) {                                                      \
-            new_pred16 = (int16_t)(pred16 - (int16_t)diff16);                    \
-            /* Underflow: subtraction wrapped past -32768 → result > original */ \
-            (predictor_var) = (new_pred16 > pred16) ? (int16_t)-32768            \
-                                                    : new_pred16;                 \
-        } else {                                                                  \
-            new_pred16 = (int16_t)(pred16 + (int16_t)diff16);                    \
-            /* Overflow: addition wrapped past +32767 → result < original */     \
-            (predictor_var) = (new_pred16 < pred16) ? (int16_t)32767             \
-                                                    : new_pred16;                 \
-        }                                                                         \
-                                                                                  \
-        idx16 = (int8_t)(step_index_var) + ima_index_table[(nibble) & 0x0Fu];   \
-        if (idx16 < 0)  idx16 = 0;                                               \
-        if (idx16 > 88) idx16 = 88;                                              \
-        (step_index_var) = (uint8_t)idx16;                                       \
-                                                                                  \
-        (out_pcm8) = (int8_t)((predictor_var) >> 8);                             \
-    } while (0)
 
 
 /* ---- Public API wrappers ------------------------------------------------ */
@@ -208,48 +156,4 @@ uint16_t adpcm_encode_block(const int8_t *src, uint16_t pcm_len,
 }
 #endif
 
-/* Standalone decode — kept for the public API; macro does the real work. */
-int8_t adpcm_decode_nibble(uint8_t nibble, ADPCMState *state)
-{
-    int8_t  pcm8;
-    int16_t predictor  = state->predictor;
-    uint8_t step_index = state->step_index;
-
-    ADPCM_DECODE_NIBBLE(nibble, predictor, step_index, pcm8);
-
-    state->predictor  = predictor;
-    state->step_index = step_index;
-
-    return pcm8;
-}
-
-/*
- * adpcm_decode_block — hot path; macro inlined, no JSR per sample.
- *
- * State pulled into locals so cc65 can keep them in zero-page if available,
- * and to avoid pointer dereferences inside the tight loop.
- */
-uint16_t adpcm_decode_block(const uint8_t *src, uint16_t sample_count,
-                            int8_t *dst, ADPCMState *state)
-{
-    uint16_t i;
-    int16_t  predictor  = state->predictor;
-    uint8_t  step_index = state->step_index;
-
-    for (i = 0; i < sample_count; i++) {
-        uint8_t byte   = src[i >> 1];
-        uint8_t nibble = (uint8_t)((i & 1u) ? (byte & 0x0Fu)
-                                             : ((byte >> 4) & 0x0Fu));
-        int8_t  pcm8;
-        ADPCM_DECODE_NIBBLE(nibble, predictor, step_index, pcm8);
-        dst[i] = pcm8;
-    }
-
-    state->predictor  = predictor;
-    state->step_index = step_index;
-
-    return sample_count;
-}
-
 #undef ADPCM_ENCODE_NIBBLE
-#undef ADPCM_DECODE_NIBBLE

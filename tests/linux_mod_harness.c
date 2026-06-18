@@ -10,7 +10,7 @@
  *     -o tests/linux_mod_harness \
  *     tests/linux_mod_harness.c \
  *     src/modplayer.c src/mod_loader.c src/pokeymax_hw.c src/loop_handler.c \
- *     src/adpcm.c src/tables.c
+ *     src/adpcm.c src/adpcm_decode.c src/tables.c
  *
  * Run:
  *   ./tests/linux_mod_harness bladerun.mod --frames 3000 --trace-boundary
