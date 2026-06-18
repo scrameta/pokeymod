@@ -12,6 +12,9 @@
 #include "mod_pattern_bank_loader.h"
 #include "sdx_path.h"
 
+#define SHFLOK 0x02BEu
+#define SHFLOK_UPPERCASE 0x40u
+
 static void usage(void)
 {
     printf("Usage: modplay.xex [/N] [/T] [modfile]\n");
@@ -30,8 +33,9 @@ static uint8_t is_option(const char *arg, char opt)
 static void quit_to_dos(void)
 {
     /* In concatenated-XEX builds, returning from the loader lets the next
-     * RUN/INIT segment continue.  Jump DOSVEC instead so help/load errors
-     * leave the XEX stream completely. */
+     * RUN/INIT segment continue.  Restore uppercase lock, then jump DOSVEC
+     * so help/load errors leave the XEX stream completely. */
+    POKE(SHFLOK, SHFLOK_UPPERCASE);
     __asm__("jmp ($000A)");
     for (;;) { }
 }
