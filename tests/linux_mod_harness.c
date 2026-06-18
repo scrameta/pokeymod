@@ -869,7 +869,7 @@ static int16_t mock_fetch_pcm8_linear_safe(const MockChan *c) {
 
 static void usage(const char *argv0) {
     fprintf(stderr,
-            "Usage: %s <modfile> [-N|/N] [-T|/T] [--frames N] [--verbose] [--trace-boundary] [--no-loop-handler] [--wav out.wav] [--rate Hz] [--gain N] [--dump-placement] [--warn-fetch] [--warn-fetch-limit N]\n",
+            "Usage: %s <modfile> [/N] [/T] [--frames N] [--verbose] [--trace-boundary] [--no-loop-handler] [--wav out.wav] [--rate Hz] [--gain N] [--dump-placement] [--warn-fetch] [--warn-fetch-limit N]\n",
             argv0);
 }
 
@@ -899,14 +899,12 @@ int main(int argc, char **argv) {
         } else if (strcmp(argv[i], "--seconds") == 0 && i + 1 < argc) {
             seconds_override = strtod(argv[++i], NULL);
             if (seconds_override < 0.0) seconds_override = 0.0;
-        } else if (strcmp(argv[i], "-N") == 0 || strcmp(argv[i], "/N") == 0 ||
-                   strcmp(argv[i], "-n") == 0 || strcmp(argv[i], "/n") == 0) {
+        } else if (strcmp(argv[i], "/N") == 0 || strcmp(argv[i], "/n") == 0) {
             mod_set_legacy_tempo_pal(0u);
             g.regs[0xD014u] = 15u;
-        } else if (strcmp(argv[i], "-T") == 0 || strcmp(argv[i], "/T") == 0 ||
-                   strcmp(argv[i], "-t") == 0 || strcmp(argv[i], "/t") == 0) {
+        } else if (strcmp(argv[i], "/T") == 0 || strcmp(argv[i], "/t") == 0) {
             mod_set_timer_timing(1u);
-        } else if (strcmp(argv[i], "-?") == 0 || strcmp(argv[i], "/?") == 0) {
+        } else if (strcmp(argv[i], "/?") == 0) {
             usage(argv[0]);
             return 0;
         } else if (strcmp(argv[i], "--verbose") == 0) {

@@ -82,7 +82,7 @@ Uses ProTracker BPM model:
 
 The player detects PAL/NTSC at start-up and an 8.8 fixed-point accumulator fires ticks at the correct sub-VBI rate for non-standard BPMs.
 
-At 125 BPM / speed 6 / PAL 50Hz: exactly 1 VBI per tick (classic ProTracker timing). For speed-only legacy modules, the loader defaults to PAL tempo; pass `/N` or `-N` if the module was authored for NTSC VBlank timing.
+At 125 BPM / speed 6 / PAL 50Hz: exactly 1 VBI per tick (classic ProTracker timing). For speed-only legacy modules, the loader defaults to PAL tempo; pass `/N` if the module was authored for NTSC VBlank timing.
 
 ---
 
