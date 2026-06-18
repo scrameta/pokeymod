@@ -176,6 +176,7 @@ Copy `modplay.xex` to your Atari (via SIO2PC, AtariMax, etc.) or include in an A
 X modplay.xex myfile.mod
 X modplay.xex /N myfile.mod       # speed-only legacy module authored for NTSC VBlank timing
 X modplay.xex /T myfile.mod       # use POKEY timer IRQ for BPM ticks instead of VBI
+X modplay.xex /?                  # show option help
 
 ```
 

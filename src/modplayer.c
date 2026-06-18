@@ -569,7 +569,7 @@ static uint16_t timer_period_for_bpm(uint8_t bpm8, uint8_t vbi_hz)
     uint32_t clock;
     uint32_t period;
     if (bpm8 == 0u) bpm8 = DEFAULT_BPM;
-    clock = (vbi_hz == NTSC_VBI_HZ) ? NTSC_PAULA_CLOCK : PAL_PAULA_CLOCK;
+    clock = (vbi_hz == NTSC_VBI_HZ) ? NTSC_POKEY_CLOCK : PAL_POKEY_CLOCK;
     /* 16-bit POKEY timer, 1.79MHz clock: period ~= clock / (BPM*24/60). */
     period = (clock * 60UL + ((uint32_t)bpm8 * 12UL)) / ((uint32_t)bpm8 * 24UL);
     if (period == 0UL) period = 1UL;

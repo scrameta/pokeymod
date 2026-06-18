@@ -906,6 +906,9 @@ int main(int argc, char **argv) {
         } else if (strcmp(argv[i], "-T") == 0 || strcmp(argv[i], "/T") == 0 ||
                    strcmp(argv[i], "-t") == 0 || strcmp(argv[i], "/t") == 0) {
             mod_set_timer_timing(1u);
+        } else if (strcmp(argv[i], "-?") == 0 || strcmp(argv[i], "/?") == 0) {
+            usage(argv[0]);
+            return 0;
         } else if (strcmp(argv[i], "--verbose") == 0) {
             g.verbose = 1;
         } else if (strcmp(argv[i], "--trace-boundary") == 0) {
@@ -951,7 +954,8 @@ int main(int argc, char **argv) {
             dbg.enabled = 1;
 //        } else if (strcmp(argv[i], "--ram-size") == 0 && i + 1 < argc) {
 //            POKEYMAX_RAM_SIZE = atol(argv[++i]);
-        } else if (argv[i][0] == '-') {
+        } else if (argv[i][0] == '-' || argv[i][0] == '/') {
+            fprintf(stderr, "bad option: %s\n", argv[i]);
             usage(argv[0]);
             return 2;
         } else {

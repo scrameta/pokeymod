@@ -12,6 +12,20 @@
 #include "mod_pattern_bank_loader.h"
 #include "sdx_path.h"
 
+static void usage(void)
+{
+    printf("Usage: modplay.xex [/N] [/T] [modfile]\n");
+    printf("  /N or -N  legacy NTSC speed-only tempo\n");
+    printf("  /T or -T  POKEY timer IRQ tick timing\n");
+    printf("  /? or -?  show this help\n");
+}
+
+static uint8_t is_option(const char *arg, char opt)
+{
+    return (arg[0] == '/' || arg[0] == '-') &&
+           (arg[1] == opt || arg[1] == (char)(opt + ('a' - 'A'))) &&
+           arg[2] == '\0';
+}
 
 int main(int argc, char *argv[])
 {
@@ -20,12 +34,18 @@ int main(int argc, char *argv[])
     int i;
 
     for (i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "/N") == 0 || strcmp(argv[i], "-N") == 0 ||
-            strcmp(argv[i], "/n") == 0 || strcmp(argv[i], "-n") == 0) {
+        if (is_option(argv[i], 'N')) {
             mod_set_legacy_tempo_pal(0u);
-        } else if (strcmp(argv[i], "/T") == 0 || strcmp(argv[i], "-T") == 0 ||
-                   strcmp(argv[i], "/t") == 0 || strcmp(argv[i], "-t") == 0) {
+        } else if (is_option(argv[i], 'T')) {
             mod_set_timer_timing(1u);
+        } else if ((argv[i][0] == '/' || argv[i][0] == '-') &&
+                   argv[i][1] == '?' && argv[i][2] == '\0') {
+            usage();
+            return 0;
+        } else if (argv[i][0] == '/' || argv[i][0] == '-') {
+            printf("Bad option: %s\n", argv[i]);
+            usage();
+            return 1;
         } else {
             filename = argv[i];
         }

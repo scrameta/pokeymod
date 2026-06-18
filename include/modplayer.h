@@ -32,6 +32,8 @@
  * ------------------------------------------------------- */
 #define PAL_PAULA_CLOCK     3546895UL
 #define NTSC_PAULA_CLOCK    3579545UL
+#define PAL_POKEY_CLOCK      (PAL_PAULA_CLOCK / 2UL)
+#define NTSC_POKEY_CLOCK     (NTSC_PAULA_CLOCK / 2UL)
 #define PAL_VBI_HZ          50
 #define NTSC_VBI_HZ         60
 
